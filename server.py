@@ -1024,7 +1024,7 @@ async def health_handler(request):
     )
 
 
-GRAPHITI_GRAPHS = ['discord', 'infrastructure', 'discord-history']
+GRAPHITI_GRAPHS = ['discord', 'infrastructure', 'discord-history', 'discord_history']
 FALKORDB_CONTAINER = 'graphiti-mcp'
 
 
@@ -1201,6 +1201,141 @@ async def graph_data_handler(request):
     )
 
 
+JSONL_PATH = "/home/clungus/.claude/projects/-home-clungus-work/bb9407c6-0d39-400c-af71-7c6765df2c69.jsonl"
+CLAUDE_PRICING = {
+    'input':       3.00 / 1_000_000,
+    'output':     15.00 / 1_000_000,
+    'cache_read':  0.30 / 1_000_000,
+    'cache_write': 3.75 / 1_000_000,
+}
+_cost_cache = {'data': None, 'ts': 0.0}
+
+
+def _parse_cost_data():
+    totals = {
+        'input': 0,
+        'output': 0,
+        'cache_read': 0,
+        'cache_write': 0,
+    }
+    session_start = None
+    now = time.time()
+    one_hour_ago = now - 3600
+    recent_tokens = 0
+
+    try:
+        with open(JSONL_PATH, 'r', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get('type') != 'assistant':
+                    continue
+                msg = obj.get('message', {})
+                if not isinstance(msg, dict):
+                    continue
+                usage = msg.get('usage')
+                if not usage or not isinstance(usage, dict):
+                    continue
+
+                ts_str = obj.get('timestamp', '')
+                ts = None
+                if ts_str:
+                    try:
+                        # Parse ISO timestamp with Z suffix
+                        ts_clean = ts_str.replace('Z', '+00:00')
+                        import datetime
+                        dt = datetime.datetime.fromisoformat(ts_clean)
+                        ts = dt.timestamp()
+                    except Exception:
+                        pass
+
+                if session_start is None and ts is not None:
+                    session_start = ts_str
+
+                inp = usage.get('input_tokens', 0) or 0
+                out = usage.get('output_tokens', 0) or 0
+                cr = usage.get('cache_read_input_tokens', 0) or 0
+                cw = usage.get('cache_creation_input_tokens', 0) or 0
+
+                totals['input'] += inp
+                totals['output'] += out
+                totals['cache_read'] += cr
+                totals['cache_write'] += cw
+
+                if ts is not None and ts >= one_hour_ago:
+                    recent_tokens += inp + out + cr + cw
+
+    except FileNotFoundError:
+        pass
+
+    cost_input = totals['input'] * CLAUDE_PRICING['input']
+    cost_output = totals['output'] * CLAUDE_PRICING['output']
+    cost_cr = totals['cache_read'] * CLAUDE_PRICING['cache_read']
+    cost_cw = totals['cache_write'] * CLAUDE_PRICING['cache_write']
+    total_cost = cost_input + cost_output + cost_cr + cost_cw
+
+    elapsed_hours = 0.0
+    if session_start:
+        try:
+            import datetime
+            dt = datetime.datetime.fromisoformat(session_start.replace('Z', '+00:00'))
+            elapsed_hours = (now - dt.timestamp()) / 3600
+        except Exception:
+            pass
+
+    tokens_per_hour = 0.0
+    cost_per_hour = 0.0
+    if elapsed_hours > 0:
+        total_tokens = totals['input'] + totals['output'] + totals['cache_read'] + totals['cache_write']
+        tokens_per_hour = total_tokens / elapsed_hours
+        cost_per_hour = total_cost / elapsed_hours
+
+    return {
+        'session_start': session_start,
+        'elapsed_hours': round(elapsed_hours, 3),
+        'total_input_tokens': totals['input'],
+        'total_output_tokens': totals['output'],
+        'total_cache_read_tokens': totals['cache_read'],
+        'total_cache_write_tokens': totals['cache_write'],
+        'total_cost_usd': round(total_cost, 6),
+        'cost_breakdown': {
+            'input': round(cost_input, 6),
+            'output': round(cost_output, 6),
+            'cache_read': round(cost_cr, 6),
+            'cache_write': round(cost_cw, 6),
+        },
+        'tokens_per_hour': round(tokens_per_hour, 1),
+        'cost_per_hour': round(cost_per_hour, 6),
+        'tokens_last_hour': recent_tokens,
+    }
+
+
+async def cost_data_handler(request):
+    now = time.time()
+    if now - _cost_cache['ts'] < 60 and _cost_cache['data'] is not None:
+        data = _cost_cache['data']
+    else:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, _parse_cost_data)
+        data['openai_spend_usd'] = await fetch_openai_spend()
+        _cost_cache['data'] = data
+        _cost_cache['ts'] = now
+
+    return web.Response(
+        text=json.dumps(data),
+        content_type='application/json',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 RESTART_PASSWORD = "shotgun"
 
 async def restart_bot_handler(request):
@@ -1239,6 +1374,7 @@ app.router.add_get('/tasks', tasks_handler)
 app.router.add_get('/task-output/{agentId}', task_output_handler)
 app.router.add_post('/meta/{agentId}', meta_handler)
 app.router.add_post('/restart-bot', restart_bot_handler)
+app.router.add_get('/cost-data', cost_data_handler)
 
 if __name__ == '__main__':
     web.run_app(app, host='127.0.0.1', port=7682)
