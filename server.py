@@ -259,12 +259,28 @@ HTML = r"""<!DOCTYPE html>
       white-space: nowrap;
     }
     #graph-link:hover { color: #58a6ff; border-color: #58a6ff; }
+    #home-link {
+      color: #8b949e;
+      font-size: 10px;
+      font-weight: normal;
+      text-decoration: none;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 2px 6px;
+      border: 1px solid #2a2a4e;
+      border-radius: 3px;
+      background: #0d1117;
+      transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    #home-link:hover { color: #58a6ff; border-color: #58a6ff; }
   </style>
 </head>
 <body>
   <div id="header">
     <span>&#x1F916; BigClungus Live Session</span>
     <span id="status" class="disconnected">&#x25CF; disconnected</span>
+    <a id="home-link" href="https://hello.clung.us/" target="_blank">&#x2190; clung.us</a>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
   </div>
   <div id="healthbar">
