@@ -317,15 +317,16 @@
       const options = {
         physics: {
           enabled: true,
-          solver: 'forceAtlas2Based',
-          forceAtlas2Based: {
-            gravitationalConstant: -50,
-            centralGravity: 0.01,
-            springLength: 100,
-            springConstant: 0.08,
-            damping: 0.4,
+          solver: 'barnesHut',
+          barnesHut: {
+            gravitationalConstant: -2000,
+            centralGravity: 0.1,
+            springLength: 150,
+            springConstant: 0.04,
+            damping: 0.6,
+            avoidOverlap: 0.1,
           },
-          stabilization: { iterations: 150, fit: true },
+          stabilization: { iterations: 300, fit: true },
         },
         interaction: {
           hover: true,
