@@ -4,12 +4,15 @@ Live terminal stream server — streams /tmp/screenlog.txt to websocket clients,
 served alongside an xterm.js HTML page.
 """
 import asyncio
+import glob
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.request
 import falkordb as _fdb
+from datetime import datetime, timezone
 from aiohttp import web
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -1721,6 +1724,78 @@ app.router.add_get('/cost-data', cost_data_handler)
 app.router.add_get('/system-status', system_status_handler)
 app.router.add_get('/topology', topology_page_handler)
 app.router.add_get('/gamecube-sounds.js', gamecube_sounds_handler)
+
+_JSONL_DIR = '/home/clungus/.claude/projects/-mnt-data'
+
+
+def _requester_from_jsonl(task_ctime: float) -> str:
+    """Scan session JSONLs for the most recent Discord message sent before task_ctime."""
+    jsonl_files = sorted(glob.glob(f'{_JSONL_DIR}/*.jsonl'), key=os.path.getmtime, reverse=True)
+    best_user, best_ts = '', 0.0
+    for jsonl_path in jsonl_files[:2]:
+        try:
+            content = open(jsonl_path).read()
+        except OSError:
+            continue
+        # Discord channel tags are stored char-by-char in JSONL; in the raw file they
+        # appear with escaped quotes: user=\\"username\\" ... ts=\\"2026-...Z\\"
+        for m in re.finditer(
+            r'user=\\"([^\\"]+)\\"[^>]*ts=\\"(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\\"',
+            content
+        ):
+            try:
+                ts = datetime.fromisoformat(m.group(2).replace('Z', '+00:00')).timestamp()
+            except ValueError:
+                continue
+            if ts < task_ctime and ts > best_ts:
+                best_ts, best_user = ts, m.group(1)
+    return best_user
+
+
+async def _auto_meta_loop():
+    """Background task: auto-create .meta.json for tasks that lack a requester."""
+    await asyncio.sleep(10)  # Let the server start first
+    while True:
+        try:
+            for fname in os.listdir(TASKS_DIR):
+                if not fname.endswith('.output'):
+                    continue
+                agent_id = fname[:-7]
+                meta_path = os.path.join(TASKS_DIR, agent_id + '.meta.json')
+                if os.path.exists(meta_path):
+                    try:
+                        data = json.load(open(meta_path))
+                        if data.get('requester'):
+                            continue  # Already has a requester
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                ctime = os.path.getctime(os.path.join(TASKS_DIR, fname))
+                requester = _requester_from_jsonl(ctime)
+                if not requester:
+                    continue
+                existing_desc = ''
+                try:
+                    existing_desc = json.load(open(meta_path)).get('description', '')
+                except (OSError, json.JSONDecodeError):
+                    pass
+                with open(meta_path, 'w') as f:
+                    json.dump({'description': existing_desc, 'requester': requester}, f)
+        except Exception as exc:
+            print(f'[auto_meta] error: {exc}')
+        await asyncio.sleep(30)
+
+
+async def _start_background_tasks(app):
+    app['auto_meta'] = asyncio.ensure_future(_auto_meta_loop())
+
+
+async def _stop_background_tasks(app):
+    app['auto_meta'].cancel()
+    await asyncio.gather(app['auto_meta'], return_exceptions=True)
+
+
+app.on_startup.append(_start_background_tasks)
+app.on_cleanup.append(_stop_background_tasks)
 
 if __name__ == '__main__':
     web.run_app(app, host='127.0.0.1', port=7682)
