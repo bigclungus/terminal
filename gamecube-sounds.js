@@ -6,7 +6,6 @@
   'use strict';
 
   var _ctx = null;
-  var _unlocked = false;
 
   function init() {
     if (_ctx) return _ctx;
@@ -18,27 +17,6 @@
     }
     return _ctx;
   }
-
-  // Unlock AudioContext on first user gesture (Chrome autoplay policy).
-  // Create a silent buffer and play it — this moves the context to 'running'.
-  function unlock() {
-    if (_unlocked) return;
-    var ctx = init();
-    if (!ctx) return;
-    var buf = ctx.createBuffer(1, 1, 22050);
-    var src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    src.start(0);
-    ctx.resume().then(function () {
-      _unlocked = true;
-      console.log('[GCSounds] AudioContext unlocked, state:', ctx.state);
-    });
-  }
-
-  // Unlock on first click/keydown anywhere on the page
-  document.addEventListener('click',   unlock, { once: false, capture: true });
-  document.addEventListener('keydown', unlock, { once: false, capture: true });
 
   function playTone(ctx, freq, startTime, duration, peakGain, freqEnd) {
     var osc  = ctx.createOscillator();
@@ -60,11 +38,13 @@
   function play(fn) {
     var ctx = init();
     if (!ctx) return;
-    if (ctx.state === 'suspended') {
-      ctx.resume().then(function () { fn(ctx, ctx.currentTime); });
-    } else {
-      fn(ctx, ctx.currentTime);
+    // Schedule slightly ahead so tones play even if context is still resuming.
+    // While suspended ctx.currentTime is frozen, so currentTime+0.05 is always
+    // safely in the future once the context starts running.
+    if (ctx.state !== 'running') {
+      ctx.resume().catch(function (e) { console.warn('[GCSounds] resume failed:', e); });
     }
+    fn(ctx, ctx.currentTime + 0.05);
   }
 
   global.GCSounds = {
