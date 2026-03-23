@@ -274,6 +274,22 @@ HTML = r"""<!DOCTYPE html>
       white-space: nowrap;
     }
     #home-link:hover { color: #58a6ff; border-color: #58a6ff; }
+    #restart-btn {
+      color: #8b949e;
+      font-size: 10px;
+      font-weight: normal;
+      text-decoration: none;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 2px 6px;
+      border: 1px solid #2a2a4e;
+      border-radius: 3px;
+      background: #0d1117;
+      transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    #restart-btn:hover { color: #e94560; border-color: #e94560; }
   </style>
 </head>
 <body>
@@ -282,6 +298,7 @@ HTML = r"""<!DOCTYPE html>
     <span id="status" class="disconnected">&#x25CF; disconnected</span>
     <a id="home-link" href="https://hello.clung.us/" target="_blank">&#x2190; clung.us</a>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
+    <button id="restart-btn">&#x2620; restart</button>
   </div>
   <div id="healthbar">
     <div class="hb-metric">
@@ -577,6 +594,27 @@ HTML = r"""<!DOCTYPE html>
 
     pollHealth();
     setInterval(pollHealth, 5000);
+
+    // Restart bot button
+    document.getElementById('restart-btn').addEventListener('click', async () => {
+      const pw = prompt('Password:');
+      if (pw === null) return;
+      try {
+        const resp = await fetch('/restart-bot', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({password: pw}),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          alert('Bot restarted.');
+        } else {
+          alert('Failed: ' + (data.error || 'unknown error'));
+        }
+      } catch (e) {
+        alert('Request error: ' + e.message);
+      }
+    });
 
   </script>
 </body>
@@ -1163,6 +1201,34 @@ async def graph_data_handler(request):
     )
 
 
+RESTART_PASSWORD = "shotgun"
+
+async def restart_bot_handler(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text='Invalid JSON')
+    if body.get('password') != RESTART_PASSWORD:
+        return web.Response(
+            status=403,
+            text=json.dumps({'ok': False, 'error': 'wrong password'}),
+            content_type='application/json',
+        )
+    try:
+        subprocess.run(
+            ['systemctl', '--user', 'restart', 'claude-bot'],
+            env={**os.environ, 'XDG_RUNTIME_DIR': '/run/user/1001'},
+            check=True,
+            timeout=10,
+        )
+    except Exception as e:
+        return web.Response(
+            text=json.dumps({'ok': False, 'error': str(e)}),
+            content_type='application/json',
+        )
+    return web.Response(text=json.dumps({'ok': True}), content_type='application/json')
+
+
 app = web.Application()
 app.router.add_get('/', index)
 app.router.add_get('/health', health_handler)
@@ -1172,6 +1238,7 @@ app.router.add_get('/ws', websocket_handler)
 app.router.add_get('/tasks', tasks_handler)
 app.router.add_get('/task-output/{agentId}', task_output_handler)
 app.router.add_post('/meta/{agentId}', meta_handler)
+app.router.add_post('/restart-bot', restart_bot_handler)
 
 if __name__ == '__main__':
     web.run_app(app, host='127.0.0.1', port=7682)
