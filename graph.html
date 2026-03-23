@@ -177,6 +177,77 @@
       border-left: 1px solid #2a2a4e;
       margin-left: 2px;
     }
+    /* Leaf panel sidebar */
+    #leaf-panel {
+      display: none;
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 320px;
+      height: 100vh;
+      background: #111318;
+      color: #eee;
+      overflow-y: auto;
+      padding: 16px;
+      font-family: monospace;
+      border-left: 1px solid #2a2a4e;
+      z-index: 1000;
+      box-shadow: -4px 0 24px rgba(0,0,0,0.5);
+    }
+    #leaf-panel-title {
+      margin: 0;
+      color: #79b8ff;
+      font-size: 14px;
+    }
+    #leaf-panel-close {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 4px;
+      transition: color 0.15s;
+    }
+    #leaf-panel-close:hover { color: #f85149; }
+    #leaf-panel-meta {
+      font-size: 10px;
+      color: #555;
+      margin-top: 4px;
+    }
+    #leaf-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      font-size: 11px;
+    }
+    #leaf-table thead tr {
+      color: #79b8ff;
+      text-align: left;
+      border-bottom: 1px solid #2a2a4e;
+    }
+    #leaf-table th {
+      padding: 4px 6px;
+      font-weight: normal;
+    }
+    #leaf-table-body tr {
+      border-bottom: 1px solid #1a1a2e;
+    }
+    #leaf-table-body tr:hover {
+      background: #1a1a2e;
+    }
+    #leaf-table-body td {
+      padding: 6px 6px;
+      vertical-align: top;
+    }
+    .lt-label { color: #ccc; }
+    .lt-rel   { color: #6b5ce7; font-size: 10px; }
+    .lt-content { color: #666; font-size: 10px; max-width: 180px; word-break: break-word; }
+    .lt-row-highlight {
+      background: #1f1a3a !important;
+      outline: 1px solid #6b5ce7;
+    }
+
     #legend {
       position: fixed;
       bottom: 14px;
@@ -227,6 +298,24 @@
   <div id="back-link"><a href="/">&#x2190; terminal</a></div>
   <div id="loading">Loading graph...</div>
 
+  <!-- Leaf node sidebar panel -->
+  <div id="leaf-panel">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h3 id="leaf-panel-title"></h3>
+      <button id="leaf-panel-close" onclick="closeLeafPanel()" title="Close">&#x2715;</button>
+    </div>
+    <div id="leaf-panel-meta"></div>
+    <table id="leaf-table">
+      <thead>
+        <tr>
+          <th>attribute</th>
+          <th>relationship</th>
+        </tr>
+      </thead>
+      <tbody id="leaf-table-body"></tbody>
+    </table>
+  </div>
+
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script>
     const GROUP_COLORS = {
@@ -253,6 +342,163 @@
     let nodesDS = null;
     let edgesDS = null;
 
+    // Leaf-node collapse state (populated in processLeafNodes)
+    let leafDetails = {};   // personNodeId -> [{label, relationship, content}]
+    let leafNodeSet = new Set();
+
+    // Full search index including collapsed leaf nodes.
+    // Each entry: { label, group, isLeaf, parentId, parentLabel, relationship, content }
+    let leafSearchIndex = [];
+
+    // Person node identifiers — labels containing any of these are treated as "person hubs"
+    const PERSON_LABELS = [
+      'jaboostin', 'justin',
+      'centronias', 'charles', 'kyle', 'dylan',
+      'graeme', 'kubariet', 'koole',
+      'bigclungus',
+    ];
+
+    function isPersonNode(node) {
+      if (!node || !node.label) return false;
+      const lc = node.label.toLowerCase();
+      return PERSON_LABELS.some(p => lc.includes(p));
+    }
+
+    /**
+     * Given the raw nodes/edges arrays, compute leafDetails and leafNodeSet,
+     * then return { visibleNodes, visibleEdges } with leaf nodes stripped out.
+     */
+    function processLeafNodes(nodes, edges) {
+      leafDetails = {};
+      leafNodeSet = new Set();
+
+      // Build a node-id lookup
+      const nodeById = {};
+      nodes.forEach(n => { nodeById[n.id] = n; });
+
+      // Compute degree for every node id
+      const degree = {};
+      edges.forEach(e => {
+        degree[e.from] = (degree[e.from] || 0) + 1;
+        degree[e.to]   = (degree[e.to]   || 0) + 1;
+      });
+
+      // Identify leaf nodes
+      nodes.forEach(n => {
+        if ((degree[n.id] || 0) !== 1) return;          // must have exactly one connection
+        const edge = edges.find(e => e.from === n.id || e.to === n.id);
+        if (!edge) return;
+        const otherId = edge.from === n.id ? edge.to : edge.from;
+        const other   = nodeById[otherId];
+        if (!isPersonNode(other)) return;                // hub must be a person
+
+        leafNodeSet.add(n.id);
+        if (!leafDetails[otherId]) leafDetails[otherId] = [];
+        leafDetails[otherId].push({
+          label:        n.label        || '(unlabeled)',
+          relationship: edge.label     || edge.title || '',
+          content:      n.title        || '',
+        });
+      });
+
+      // Sort each person's leaf list alphabetically by label
+      Object.values(leafDetails).forEach(arr =>
+        arr.sort((a, b) => a.label.localeCompare(b.label))
+      );
+
+      // Build the full search index: rendered nodes + collapsed leaf nodes
+      leafSearchIndex = [];
+      // Rendered (non-leaf) nodes
+      nodes.filter(n => !leafNodeSet.has(n.id)).forEach(n => {
+        leafSearchIndex.push({
+          label: n.label || '',
+          group: n.group || '',
+          isLeaf: false,
+          parentId: null,
+          parentLabel: null,
+          relationship: null,
+          content: n.title || '',
+          _nodeId: n.id,
+        });
+      });
+      // Collapsed leaf nodes
+      Object.entries(leafDetails).forEach(([parentId, leaves]) => {
+        const parentNode = nodeById[parentId];
+        const parentLabel = parentNode ? (parentNode.label || parentId) : parentId;
+        leaves.forEach(leaf => {
+          leafSearchIndex.push({
+            label: leaf.label,
+            group: '',
+            isLeaf: true,
+            parentId: parentId,
+            parentLabel: parentLabel,
+            relationship: leaf.relationship,
+            content: leaf.content,
+            _nodeId: null,
+          });
+        });
+      });
+
+      const visibleNodes = nodes.filter(n => !leafNodeSet.has(n.id));
+      const visibleEdges = edges.filter(e => !leafNodeSet.has(e.from) && !leafNodeSet.has(e.to));
+      return { visibleNodes, visibleEdges };
+    }
+
+    function closeLeafPanel() {
+      document.getElementById('leaf-panel').style.display = 'none';
+      document.getElementById('node-search-overlay').style.right = '12px';
+      document.getElementById('counts').style.right = '12px';
+    }
+
+    /**
+     * Open the leaf panel for a given person node.
+     * @param {string} nodeId       - the person node's ID
+     * @param {string} nodeLabel    - display name for the panel header
+     * @param {string} [highlightLabel] - if provided, scroll to and highlight the row with this label
+     */
+    function openLeafPanel(nodeId, nodeLabel, highlightLabel) {
+      const items = leafDetails[nodeId] || [];
+      document.getElementById('leaf-panel-title').textContent = nodeLabel || nodeId;
+      document.getElementById('leaf-panel-meta').textContent =
+        items.length + ' collapsed attribute' + (items.length !== 1 ? 's' : '');
+
+      const tbody = document.getElementById('leaf-table-body');
+      tbody.innerHTML = items.map(item => {
+        const rel     = item.relationship ? escapeHtmlGlobal(item.relationship) : '<span style="color:#333">—</span>';
+        const content = item.content
+          ? '<div class="lt-content">' + escapeHtmlGlobal(item.content) + '</div>'
+          : '';
+        const rowClass = (highlightLabel && item.label === highlightLabel)
+          ? ' class="lt-row-highlight"'
+          : '';
+        const dataAttr = ' data-label="' + escapeHtmlGlobal(item.label) + '"';
+        return '<tr' + rowClass + dataAttr + '>' +
+          '<td class="lt-label">' + escapeHtmlGlobal(item.label) + content + '</td>' +
+          '<td class="lt-rel">'  + rel + '</td>' +
+          '</tr>';
+      }).join('');
+
+      document.getElementById('leaf-panel').style.display = 'block';
+      // Shift search overlay and counts badge left so they don't overlap the panel
+      document.getElementById('node-search-overlay').style.right = '332px';
+      document.getElementById('counts').style.right = '332px';
+
+      // Scroll highlighted row into view
+      if (highlightLabel) {
+        const highlightedRow = tbody.querySelector('.lt-row-highlight');
+        if (highlightedRow) {
+          setTimeout(() => highlightedRow.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+        }
+      }
+    }
+
+    function escapeHtmlGlobal(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
     // Auto-refresh state
     const AUTO_REFRESH_INTERVAL = 60; // seconds
     let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
@@ -260,15 +506,24 @@
     let countdownTimer = null;
 
     function makeNodeItem(n) {
+      // Person nodes with collapsed leaves get a slightly larger size and bolder border
+      const hasLeaves = !!leafDetails[n.id];
+      const baseColor = GROUP_COLORS[n.group] || DEFAULT_COLOR;
+      const nodeColor = hasLeaves
+        ? Object.assign({}, baseColor, { border: '#79b8ff' })
+        : baseColor;
+      const tooltipSuffix = hasLeaves
+        ? '\n\n[' + leafDetails[n.id].length + ' collapsed attributes — click to expand]'
+        : '';
       return {
         id: n.id,
         label: n.label,
-        title: n.title,
+        title: (n.title || '') + tooltipSuffix,
         group: n.group,
-        color: GROUP_COLORS[n.group] || DEFAULT_COLOR,
+        color: nodeColor,
         font: { color: '#e6edf3', size: 11, face: 'monospace' },
-        borderWidth: 1,
-        size: 16,
+        borderWidth: hasLeaves ? 2 : 1,
+        size: hasLeaves ? 22 : 16,
       };
     }
 
@@ -300,8 +555,12 @@
       try {
         const data = await fetchGraphData();
         loadingEl.style.display = 'none';
-        renderGraph(data);
-        countsEl.textContent = data.nodes.length + ' nodes  |  ' + data.edges.length + ' edges';
+        const { visibleNodes, visibleEdges } = processLeafNodes(data.nodes, data.edges);
+        renderGraph({ nodes: visibleNodes, edges: visibleEdges });
+        const leafCount = data.nodes.length - visibleNodes.length;
+        countsEl.textContent =
+          visibleNodes.length + ' nodes  |  ' + visibleEdges.length + ' edges' +
+          (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '');
       } catch (e) {
         loadingEl.textContent = 'Error: ' + e.message;
         countsEl.textContent = 'error';
@@ -358,6 +617,23 @@
       graphNetwork.once('stabilizationIterationsDone', () => {
         graphNetwork.setOptions({ physics: { stabilization: false } });
       });
+
+      // Click handler: open leaf panel for person nodes, close panel for background clicks
+      graphNetwork.on('click', function (params) {
+        if (params.nodes.length > 0) {
+          const nodeId = params.nodes[0];
+          if (leafDetails[nodeId]) {
+            const node = nodesDS.get(nodeId);
+            openLeafPanel(nodeId, node ? node.label : nodeId);
+          } else {
+            // Clicked a non-person or person with no collapsed leaves — close panel
+            closeLeafPanel();
+          }
+        } else {
+          // Clicked background
+          closeLeafPanel();
+        }
+      });
     }
 
     async function refreshGraph() {
@@ -368,10 +644,11 @@
       const countsEl = document.getElementById('counts');
       try {
         const data = await fetchGraphData();
+        const { visibleNodes, visibleEdges } = processLeafNodes(data.nodes, data.edges);
 
-        // Build lookup maps for incoming data
-        const incomingNodeIds = new Set(data.nodes.map(n => n.id));
-        const incomingEdgeIds = new Set(data.edges.map((_, i) => i));
+        // Build lookup maps for incoming visible data
+        const incomingNodeIds = new Set(visibleNodes.map(n => n.id));
+        const incomingEdgeIds = new Set(visibleEdges.map((_, i) => i));
 
         // Remove nodes/edges no longer present
         const removedNodeIds = nodesDS.getIds().filter(id => !incomingNodeIds.has(id));
@@ -380,14 +657,17 @@
         if (removedEdgeIds.length) edgesDS.remove(removedEdgeIds);
 
         // Update or add nodes
-        const nodeUpdates = data.nodes.map(makeNodeItem);
+        const nodeUpdates = visibleNodes.map(makeNodeItem);
         nodesDS.update(nodeUpdates);
 
         // Update or add edges
-        const edgeUpdates = data.edges.map(makeEdgeItem);
+        const edgeUpdates = visibleEdges.map(makeEdgeItem);
         edgesDS.update(edgeUpdates);
 
-        countsEl.textContent = data.nodes.length + ' nodes  |  ' + data.edges.length + ' edges';
+        const leafCount = data.nodes.length - visibleNodes.length;
+        countsEl.textContent =
+          visibleNodes.length + ' nodes  |  ' + visibleEdges.length + ' edges' +
+          (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '');
         pulseIndicator();
       } catch (e) {
         countsEl.textContent = 'refresh error';
@@ -457,12 +737,14 @@
     });
 
     // ── Node Search (Ctrl+F / Cmd+F) ─────────────────────────────────────────
+    // Searches ALL nodes including leaf nodes collapsed into the sidebar panel.
 
     (function () {
       const overlay  = document.getElementById('node-search-overlay');
       const input    = document.getElementById('node-search-input');
       const results  = document.getElementById('node-search-results');
       let activeIdx  = -1;
+      // matchCache entries: { label, group, isLeaf, parentId, parentLabel, _nodeId }
       let matchCache = [];
 
       function clearSearch() {
@@ -472,37 +754,59 @@
         activeIdx = -1;
       }
 
-      function buildResults(query) {
-        results.innerHTML = '';
-        activeIdx = -1;
-        if (!query || !nodesDS) { matchCache = []; return; }
-
-        const q = query.toLowerCase();
-        const all = nodesDS.get();
-        matchCache = all
-          .filter(n => n.label && n.label.toLowerCase().includes(q))
-          .slice(0, 8);
-
-        matchCache.forEach(function (node, i) {
-          const div = document.createElement('div');
-          div.className = 'node-search-result';
-          div.dataset.idx = i;
-          const groupLabel = node.group || '';
-          const dotColor = (GROUP_COLORS[groupLabel] || DEFAULT_COLOR).background;
-          div.innerHTML =
-            escapeHtml(node.label) +
-            (groupLabel ? '<span class="ns-group" style="color:' + dotColor + '">&#9679; ' + escapeHtml(groupLabel) + '</span>' : '');
-          div.addEventListener('mouseenter', function () { setActive(i); });
-          div.addEventListener('click', function () { selectResult(i); });
-          results.appendChild(div);
-        });
-      }
-
       function escapeHtml(s) {
         return String(s)
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;');
+      }
+
+      function buildResults(query) {
+        results.innerHTML = '';
+        activeIdx = -1;
+        if (!query) { matchCache = []; return; }
+
+        const q = query.toLowerCase();
+
+        // Search leafSearchIndex (includes rendered nodes + collapsed leaf nodes).
+        // Fall back to nodesDS if leafSearchIndex not yet populated (e.g. graph still loading).
+        let candidates;
+        if (leafSearchIndex && leafSearchIndex.length > 0) {
+          candidates = leafSearchIndex.filter(entry =>
+            entry.label && entry.label.toLowerCase().includes(q)
+          );
+        } else if (nodesDS) {
+          candidates = nodesDS.get()
+            .filter(n => n.label && n.label.toLowerCase().includes(q))
+            .map(n => ({ label: n.label, group: n.group || '', isLeaf: false, _nodeId: n.id, parentId: null, parentLabel: null }));
+        } else {
+          candidates = [];
+        }
+
+        matchCache = candidates.slice(0, 12);
+
+        matchCache.forEach(function (entry, i) {
+          const div = document.createElement('div');
+          div.className = 'node-search-result';
+          div.dataset.idx = i;
+          const groupLabel = entry.group || '';
+          const dotColor = (GROUP_COLORS[groupLabel] || DEFAULT_COLOR).background;
+
+          if (entry.isLeaf) {
+            // Leaf node: show label + "in [ParentName]" annotation
+            div.innerHTML =
+              escapeHtml(entry.label) +
+              '<span class="ns-group" style="color:#79b8ff"> in ' + escapeHtml(entry.parentLabel || '?') + '</span>';
+          } else {
+            div.innerHTML =
+              escapeHtml(entry.label) +
+              (groupLabel ? '<span class="ns-group" style="color:' + dotColor + '">&#9679; ' + escapeHtml(groupLabel) + '</span>' : '');
+          }
+
+          div.addEventListener('mouseenter', function () { setActive(i); });
+          div.addEventListener('click', function () { selectResult(i); });
+          results.appendChild(div);
+        });
       }
 
       function setActive(idx) {
@@ -514,25 +818,39 @@
       }
 
       let flashTimer = null;
-      function selectResult(idx) {
-        if (!matchCache[idx]) return;
-        const node = matchCache[idx];
-        clearSearch();
-        if (!graphNetwork) return;
 
-        graphNetwork.selectNodes([node.id]);
-        graphNetwork.focus(node.id, {
+      function focusAndFlashNode(nodeId) {
+        if (!graphNetwork || !nodesDS) return;
+        graphNetwork.selectNodes([nodeId]);
+        graphNetwork.focus(nodeId, {
           scale: 1.5,
           animation: { duration: 500, easingFunction: 'easeInOutQuad' },
         });
-
-        // Brief flash: override border color then restore
-        const orig = nodesDS.get(node.id);
-        nodesDS.update({ id: node.id, borderWidth: 4, color: Object.assign({}, orig.color, { border: '#6b5ce7' }) });
+        const orig = nodesDS.get(nodeId);
+        if (!orig) return;
+        nodesDS.update({ id: nodeId, borderWidth: 4, color: Object.assign({}, orig.color, { border: '#6b5ce7' }) });
         clearTimeout(flashTimer);
         flashTimer = setTimeout(function () {
-          nodesDS.update({ id: node.id, borderWidth: orig.borderWidth || 1, color: orig.color });
+          nodesDS.update({ id: nodeId, borderWidth: orig.borderWidth || 1, color: orig.color });
         }, 800);
+      }
+
+      function selectResult(idx) {
+        if (!matchCache[idx]) return;
+        const entry = matchCache[idx];
+        clearSearch();
+
+        if (entry.isLeaf) {
+          // Leaf node: navigate to the parent person node, open panel, highlight the row
+          if (!graphNetwork) return;
+          const parentId = entry.parentId;
+          const parentNode = nodesDS ? nodesDS.get(parentId) : null;
+          focusAndFlashNode(parentId);
+          openLeafPanel(parentId, parentNode ? parentNode.label : (entry.parentLabel || parentId), entry.label);
+        } else {
+          // Rendered node: navigate directly
+          focusAndFlashNode(entry._nodeId);
+        }
       }
 
       // Keyboard shortcuts
