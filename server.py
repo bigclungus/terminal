@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-AUTH_PASSWORD = "rbl8D4NgcA9Mp@2o"
+AUTH_PASSWORD = os.environ.get('AUTH_PASSWORD', '')
 AUTH_COOKIE   = "tauth"
 COOKIE_MAX_AGE = 86400  # 24 hours
 
@@ -1575,7 +1575,7 @@ async def cost_data_handler(request):
     )
 
 
-RESTART_PASSWORD = "shotgun"
+RESTART_PASSWORD = os.environ.get('RESTART_PASSWORD', '')
 
 async def restart_bot_handler(request):
     try:
