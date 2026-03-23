@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 from aiohttp import web, ClientSession
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-AUTH_PASSWORD  = os.environ.get('AUTH_PASSWORD', '')
 AUTH_COOKIE    = "tauth"
 GITHUB_COOKIE  = "tauth_github"
 COOKIE_MAX_AGE = 86400  # 24 hours
@@ -25,7 +24,7 @@ COOKIE_MAX_AGE = 86400  # 24 hours
 # GitHub OAuth — only active when GITHUB_CLIENT_ID is set
 GITHUB_CLIENT_ID      = os.environ.get('GITHUB_CLIENT_ID', '')
 GITHUB_CLIENT_SECRET  = os.environ.get('GITHUB_CLIENT_SECRET', '')
-GITHUB_ALLOWED_USERS  = set(os.environ.get('GITHUB_ALLOWED_USERS', '').split(',')) - {''}
+GITHUB_ALLOWED_USERS  = {u.lower() for u in os.environ.get('GITHUB_ALLOWED_USERS', '').split(',') if u}
 
 _GITHUB_BTN = """
     <a href="/auth/github" class="github-btn">
@@ -49,21 +48,11 @@ _LOGIN_STYLES = """
     .box { background:#1a1a2e; border:1px solid #e94560; border-radius:6px;
            padding:32px 40px; min-width:300px; text-align:center; }
     h2 { color:#e94560; margin-bottom:20px; font-size:16px; letter-spacing:.05em; }
-    input[type=password] { width:100%; padding:8px 10px; background:#0d0d0d;
-      border:1px solid #2a2a4e; color:#d4d4d4; font-family:monospace;
-      font-size:14px; border-radius:3px; margin-bottom:12px; outline:none; }
-    input[type=password]:focus { border-color:#e94560; }
-    button { width:100%; padding:9px; background:#e94560; color:#fff;
-             border:none; border-radius:3px; font-family:monospace;
-             font-size:14px; cursor:pointer; }
-    button:hover { background:#c73050; }
-    .err { color:#e94560; font-size:12px; margin-top:10px; }
     .github-btn { display:flex; align-items:center; justify-content:center;
       width:100%; padding:9px; background:#238636; color:#fff; text-decoration:none;
       border-radius:3px; font-family:monospace; font-size:14px; cursor:pointer;
       border:1px solid #2ea043; margin-bottom:12px; }
-    .github-btn:hover { background:#2ea043; }
-    .divider { color:#444; font-size:11px; margin:12px 0; }"""
+    .github-btn:hover { background:#2ea043; }"""
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html>
@@ -84,49 +73,14 @@ LOGIN_HTML = """<!DOCTYPE html>
 
 
 def _build_login_page(error=''):
-    if GITHUB_CLIENT_ID:
-        body = _GITHUB_BTN
-        if AUTH_PASSWORD:
-            body += '\n    <div class="divider">— or —</div>'
-            body += """
-    <form method="POST" action="/login">
-      <input type="password" name="password" placeholder="Password">
-      <button type="submit">Enter</button>
-      {error}
-    </form>""".format(error=error)
-    else:
-        body = """
-    <form method="POST" action="/login">
-      <input type="password" name="password" placeholder="Password" autofocus>
-      <button type="submit">Enter</button>
-      {error}
-    </form>""".format(error=error)
+    if not GITHUB_CLIENT_ID:
+        raise RuntimeError('GITHUB_CLIENT_ID is not set — GitHub OAuth is required')
+    body = _GITHUB_BTN
     return LOGIN_HTML.format(styles=_LOGIN_STYLES, body=body)
 
 
 async def login_handler(request):
-    if request.method == 'GET':
-        return web.Response(text=_build_login_page(), content_type='text/html')
-    # POST — check password
-    try:
-        data = await request.post()
-        pw = data.get('password', '')
-    except Exception:
-        pw = ''
-    if pw == AUTH_PASSWORD:
-        resp = web.HTTPFound('/')
-        resp.set_cookie(
-            AUTH_COOKIE, 'ok',
-            max_age=COOKIE_MAX_AGE,
-            httponly=True,
-            samesite='Lax',
-        )
-        return resp
-    return web.Response(
-        text=_build_login_page(error='<p class="err">Wrong password.</p>'),
-        content_type='text/html',
-        status=401,
-    )
+    return web.Response(text=_build_login_page(), content_type='text/html')
 
 
 async def github_auth_handler(request):
@@ -181,7 +135,7 @@ async def github_callback_handler(request):
     if not username:
         raise web.HTTPForbidden(reason='Could not determine GitHub username')
 
-    if GITHUB_ALLOWED_USERS and username not in GITHUB_ALLOWED_USERS:
+    if GITHUB_ALLOWED_USERS and username.lower() not in GITHUB_ALLOWED_USERS:
         raise web.HTTPForbidden(reason=f'GitHub user {username!r} is not allowed')
 
     resp = web.HTTPFound('/')
@@ -197,12 +151,10 @@ async def github_callback_handler(request):
 
 
 def _is_authed(request):
-    # Accept either password cookie or GitHub OAuth cookie
-    if request.cookies.get(AUTH_COOKIE) == 'ok':
-        return True
+    # Only GitHub OAuth cookie is accepted
     gh_user = request.cookies.get(GITHUB_COOKIE, '')
     if gh_user:
-        if not GITHUB_ALLOWED_USERS or gh_user in GITHUB_ALLOWED_USERS:
+        if not GITHUB_ALLOWED_USERS or gh_user.lower() in GITHUB_ALLOWED_USERS:
             return True
     return False
 
