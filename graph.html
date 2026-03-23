@@ -103,6 +103,15 @@
       opacity: 1;
       color: #56d364;
     }
+    #ingestion-status {
+      font-size: 10px;
+      font-family: monospace;
+      color: #8b949e;
+      white-space: nowrap;
+      padding-left: 8px;
+      border-left: 1px solid #2a2a4e;
+      margin-left: 2px;
+    }
   </style>
 </head>
 <body>
@@ -111,6 +120,7 @@
     <button class="graph-btn" onclick="refreshGraph()">Refresh</button>
     <button class="graph-btn" onclick="fitGraph()">Fit</button>
     <span id="auto-refresh-indicator">auto-refresh: 60s</span>
+    <span id="ingestion-status">&#x1F4CA; loading...</span>
   </div>
   <div id="counts">loading...</div>
   <div id="back-link"><a href="/">&#x2190; terminal</a></div>
@@ -308,6 +318,24 @@
         await refreshGraph();
       }, AUTO_REFRESH_INTERVAL * 1000);
     }
+
+    // Ingestion status
+    async function refreshIngestionStatus() {
+      const el = document.getElementById('ingestion-status');
+      try {
+        const resp = await fetch('/ingestion-status');
+        if (!resp.ok) { el.textContent = '&#x1F4CA; unavailable'; return; }
+        const d = await resp.json();
+        let text = '\uD83D\uDCCA Graph: ' + d.episodes + '/' + d.total_episodes + ' episodes \u00B7 ' + d.entities + ' entities \u00B7 ' + d.edges + ' edges';
+        if (d.workers_running > 0) text += ' \u00B7 \u23F3 ingesting...';
+        el.textContent = text;
+      } catch (e) {
+        el.textContent = '\uD83D\uDCCA unavailable';
+      }
+    }
+
+    refreshIngestionStatus();
+    setInterval(refreshIngestionStatus, 10000);
 
     loadGraph().then(startAutoRefresh);
   </script>
