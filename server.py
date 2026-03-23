@@ -11,6 +11,89 @@ import time
 import urllib.request
 from aiohttp import web
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
+AUTH_PASSWORD = "rbl8D4NgcA9Mp@2o"
+AUTH_COOKIE   = "tauth"
+COOKIE_MAX_AGE = 86400  # 24 hours
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Login — BigClungus Terminal</title>
+  <style>
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    body {{ background:#0d0d0d; color:#d4d4d4; font-family:monospace;
+           display:flex; align-items:center; justify-content:center; height:100vh; }}
+    .box {{ background:#1a1a2e; border:1px solid #e94560; border-radius:6px;
+           padding:32px 40px; min-width:300px; text-align:center; }}
+    h2 {{ color:#e94560; margin-bottom:20px; font-size:16px; letter-spacing:.05em; }}
+    input[type=password] {{ width:100%; padding:8px 10px; background:#0d0d0d;
+      border:1px solid #2a2a4e; color:#d4d4d4; font-family:monospace;
+      font-size:14px; border-radius:3px; margin-bottom:12px; outline:none; }}
+    input[type=password]:focus {{ border-color:#e94560; }}
+    button {{ width:100%; padding:9px; background:#e94560; color:#fff;
+             border:none; border-radius:3px; font-family:monospace;
+             font-size:14px; cursor:pointer; }}
+    button:hover {{ background:#c73050; }}
+    .err {{ color:#e94560; font-size:12px; margin-top:10px; }}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>&#x1F916; BigClungus Terminal</h2>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password" autofocus>
+      <button type="submit">Enter</button>
+      {error}
+    </form>
+  </div>
+</body>
+</html>"""
+
+
+async def login_handler(request):
+    if request.method == 'GET':
+        return web.Response(
+            text=LOGIN_HTML.format(error=''),
+            content_type='text/html',
+        )
+    # POST — check password
+    try:
+        data = await request.post()
+        pw = data.get('password', '')
+    except Exception:
+        pw = ''
+    if pw == AUTH_PASSWORD:
+        resp = web.HTTPFound('/')
+        resp.set_cookie(
+            AUTH_COOKIE, 'ok',
+            max_age=COOKIE_MAX_AGE,
+            httponly=True,
+            samesite='Lax',
+        )
+        return resp
+    return web.Response(
+        text=LOGIN_HTML.format(error='<p class="err">Wrong password.</p>'),
+        content_type='text/html',
+        status=401,
+    )
+
+
+def _is_authed(request):
+    return request.cookies.get(AUTH_COOKIE) == 'ok'
+
+
+@web.middleware
+async def auth_middleware(request, handler):
+    path = request.path
+    if path == '/login':
+        return await handler(request)
+    if not _is_authed(request):
+        raise web.HTTPFound('/login')
+    return await handler(request)
+# ─────────────────────────────────────────────────────────────────────────────
+
 try:
     import psutil
     HAS_PSUTIL = True
@@ -18,7 +101,7 @@ except ImportError:
     HAS_PSUTIL = False
 
 LOGFILE = "/tmp/screenlog.txt"
-TASKS_DIR = "/tmp/claude-1001/-home-clungus-work/bb9407c6-0d39-400c-af71-7c6765df2c69/tasks"
+TASKS_DIR = "/tmp/claude-1001/-mnt-data/bb9407c6-0d39-400c-af71-7c6765df2c69/tasks"
 
 HTML = r"""<!DOCTYPE html>
 <html>
@@ -259,6 +342,21 @@ HTML = r"""<!DOCTYPE html>
       white-space: nowrap;
     }
     #graph-link:hover { color: #58a6ff; border-color: #58a6ff; }
+    #topology-link {
+      color: #8b949e;
+      font-size: 10px;
+      font-weight: normal;
+      text-decoration: none;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 2px 6px;
+      border: 1px solid #2a2a4e;
+      border-radius: 3px;
+      background: #0d1117;
+      transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    #topology-link:hover { color: #58a6ff; border-color: #58a6ff; }
     #home-link {
       color: #8b949e;
       font-size: 10px;
@@ -298,6 +396,7 @@ HTML = r"""<!DOCTYPE html>
     <span id="status" class="disconnected">&#x25CF; disconnected</span>
     <a id="home-link" href="https://hello.clung.us/" target="_blank">&#x2190; clung.us</a>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
+    <a id="topology-link" href="/topology" target="_blank">&#x1F5FA; system</a>
     <button id="restart-btn">&#x2620; restart</button>
   </div>
   <div id="healthbar">
@@ -631,6 +730,13 @@ async def graph_page_handler(request):
     return web.Response(text=content, content_type='text/html')
 
 async def websocket_handler(request):
+    if not _is_authed(request):
+        # Reject unauthenticated WebSocket connections immediately
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.close(code=4401, message=b'Unauthorized')
+        return ws
+
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
@@ -1366,17 +1472,121 @@ async def restart_bot_handler(request):
     return web.Response(text=json.dumps({'ok': True}), content_type='application/json')
 
 
-app = web.Application()
+SERVICES = [
+    "claude-bot", "terminal-server", "website", "1998",
+    "temporal", "temporal-worker", "cloudflared", "discord-bridge"
+]
+
+async def system_status_handler(request):
+    nodes = []
+    for svc in SERVICES:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", svc],
+            capture_output=True, text=True,
+            env={**os.environ, 'XDG_RUNTIME_DIR': '/run/user/1001'},
+            timeout=5,
+        )
+        status = result.stdout.strip()  # "active", "inactive", "failed"
+        nodes.append({"id": svc, "status": status})
+
+    # Also check Docker containers
+    try:
+        docker = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}|{{.Status}}"],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in docker.stdout.strip().split('\n'):
+            if '|' in line:
+                name, status = line.split('|', 1)
+                nodes.append({
+                    "id": name.strip(),
+                    "status": "active" if "Up" in status else "down",
+                    "type": "docker"
+                })
+    except Exception:
+        pass
+
+    # Define edges (relationships/dependencies)
+    edges = [
+        {"from": "claude-bot", "to": "terminal-server", "label": "streams to"},
+        {"from": "claude-bot", "to": "cloudflared", "label": "via"},
+        {"from": "terminal-server", "to": "docker-graphiti-mcp-1", "label": "queries"},
+        {"from": "docker-graphiti-mcp-1", "to": "docker-falkordb-1", "label": "stores in"},
+        {"from": "temporal-worker", "to": "temporal", "label": "connects to"},
+        {"from": "temporal-worker", "to": "discord-bridge", "label": "posts via"},
+        {"from": "cloudflared", "to": "terminal-server", "label": "terminal.clung.us"},
+        {"from": "cloudflared", "to": "website", "label": "hello.clung.us"},
+        {"from": "cloudflared", "to": "temporal", "label": "temporal.clung.us"},
+    ]
+
+    return web.Response(
+        text=json.dumps({"nodes": nodes, "edges": edges}),
+        content_type='application/json',
+        headers={'Cache-Control': 'no-cache'},
+    )
+
+
+async def topology_page_handler(request):
+    topology_html_path = os.path.join(os.path.dirname(__file__), 'topology.html')
+    with open(topology_html_path, 'r') as f:
+        content = f.read()
+    return web.Response(text=content, content_type='text/html')
+
+
+async def ingestion_status_handler(request):
+    """Return discord_history ingestion progress stats from FalkorDB."""
+    TOTAL_EPISODES = 141
+    try:
+        import falkordb
+        r = falkordb.FalkorDB(host='localhost', port=6379)
+        g = r.select_graph('discord_history')
+        episodes = g.query("MATCH (e:Episodic) RETURN count(e) as cnt").result_set[0][0]
+        nodes    = g.query("MATCH (n:Entity) RETURN count(n) as cnt").result_set[0][0]
+        edges    = g.query("MATCH ()-[r]->() RETURN count(r) as cnt").result_set[0][0]
+    except Exception as exc:
+        return web.Response(
+            text=json.dumps({'error': str(exc)}),
+            content_type='application/json',
+            status=503,
+        )
+    try:
+        result = subprocess.run(
+            'ps aux | grep scrape_discord | grep -v grep | wc -l',
+            shell=True, capture_output=True, text=True, timeout=5,
+        )
+        workers_running = int(result.stdout.strip())
+    except Exception:
+        workers_running = 0
+    pct = round(episodes / TOTAL_EPISODES * 100, 1) if TOTAL_EPISODES else 0
+    return web.Response(
+        text=json.dumps({
+            'episodes': episodes,
+            'total_episodes': TOTAL_EPISODES,
+            'entities': nodes,
+            'edges': edges,
+            'workers_running': workers_running,
+            'pct': pct,
+        }),
+        content_type='application/json',
+    )
+
+
+app = web.Application(middlewares=[auth_middleware])
+app.router.add_get('/login', login_handler)
+app.router.add_post('/login', login_handler)
 app.router.add_get('/', index)
 app.router.add_get('/health', health_handler)
 app.router.add_get('/graph-data', graph_data_handler)
 app.router.add_get('/graph', graph_page_handler)
+app.router.add_get('/ingestion-status', ingestion_status_handler)
 app.router.add_get('/ws', websocket_handler)
 app.router.add_get('/tasks', tasks_handler)
 app.router.add_get('/task-output/{agentId}', task_output_handler)
 app.router.add_post('/meta/{agentId}', meta_handler)
 app.router.add_post('/restart-bot', restart_bot_handler)
 app.router.add_get('/cost-data', cost_data_handler)
+app.router.add_get('/system-status', system_status_handler)
+app.router.add_get('/topology', topology_page_handler)
 
 if __name__ == '__main__':
     web.run_app(app, host='127.0.0.1', port=7682)

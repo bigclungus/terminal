@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
+  <title>System Topology — BigClungus</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+      font-family: monospace;
+    }
+    #graph-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+    #toolbar {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 6px 10px;
+      backdrop-filter: blur(4px);
+    }
+    .graph-btn {
+      background: #161628;
+      border: 1px solid #2a2a4e;
+      color: #aaa;
+      font-size: 10px;
+      padding: 3px 8px;
+      cursor: pointer;
+      border-radius: 3px;
+      font-family: monospace;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .graph-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    #back-link {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 5px 10px;
+      backdrop-filter: blur(4px);
+    }
+    #back-link a {
+      color: #8b949e;
+      text-decoration: none;
+      font-size: 11px;
+      font-family: monospace;
+      transition: color 0.15s;
+    }
+    #back-link a:hover { color: #58a6ff; }
+    #status-bar {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 6px 12px;
+      backdrop-filter: blur(4px);
+      color: #8b949e;
+      font-size: 11px;
+      font-family: monospace;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    #refresh-countdown {
+      font-size: 10px;
+      color: #3fb950;
+      border-left: 1px solid #2a2a4e;
+      padding-left: 8px;
+    }
+    #refresh-countdown.pulse { color: #56d364; }
+    #loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #58a6ff;
+      font-size: 13px;
+      font-family: monospace;
+      z-index: 30;
+      pointer-events: none;
+    }
+    #legend {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 8px 12px;
+      backdrop-filter: blur(4px);
+      font-size: 10px;
+      font-family: monospace;
+      color: #8b949e;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .legend-square {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="graph-canvas"></div>
+
+  <div id="toolbar">
+    <button class="graph-btn" onclick="refreshTopology()">Refresh</button>
+    <button class="graph-btn" onclick="fitGraph()">Fit</button>
+    <span id="refresh-countdown">auto-refresh: 10s</span>
+  </div>
+
+  <div id="status-bar">
+    <span id="node-counts">loading...</span>
+  </div>
+
+  <div id="back-link"><a href="/">&#x2190; terminal</a></div>
+
+  <div id="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#4caf50;box-shadow:0 0 5px #4caf50"></div> active</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e94560;box-shadow:0 0 5px #e94560"></div> failed / inactive</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#888"></div> unknown</div>
+    <div class="legend-item"><div class="legend-square" style="background:#4caf50;box-shadow:0 0 5px #4caf50"></div> docker (active)</div>
+    <div class="legend-item"><div class="legend-square" style="background:#e94560"></div> docker (down)</div>
+  </div>
+
+  <div id="loading">Loading topology...</div>
+
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script>
+    let topoNetwork = null;
+    let nodesDS = null;
+    let edgesDS = null;
+
+    const AUTO_REFRESH_INTERVAL = 10; // seconds
+    let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+    let countdownTimer = null;
+    let refreshTimer = null;
+
+    function statusColor(status) {
+      if (status === 'active') {
+        return {
+          background: '#1a3a1a',
+          border: '#4caf50',
+          highlight: { background: '#1e4a1e', border: '#56d364' },
+          hover: { background: '#1e4a1e', border: '#56d364' },
+        };
+      }
+      if (status === 'failed' || status === 'down') {
+        return {
+          background: '#3a1a1a',
+          border: '#e94560',
+          highlight: { background: '#4a1a1a', border: '#ff6080' },
+          hover: { background: '#4a1a1a', border: '#ff6080' },
+        };
+      }
+      // inactive, unknown, etc.
+      return {
+        background: '#1e1e2e',
+        border: '#555',
+        highlight: { background: '#2a2a3e', border: '#888' },
+        hover: { background: '#2a2a3e', border: '#888' },
+      };
+    }
+
+    function makeNodeItem(n) {
+      const isDocker = n.type === 'docker';
+      const color = statusColor(n.status);
+      const glowColor = n.status === 'active' ? '#4caf50' : (n.status === 'failed' || n.status === 'down') ? '#e94560' : null;
+      return {
+        id: n.id,
+        label: n.id,
+        title: n.id + '\nstatus: ' + n.status + (isDocker ? '\ntype: docker container' : '\ntype: systemd service'),
+        shape: isDocker ? 'square' : 'dot',
+        color: color,
+        font: { color: '#e6edf3', size: 11, face: 'monospace' },
+        borderWidth: n.status === 'active' ? 2 : 1,
+        size: isDocker ? 14 : 18,
+        shadow: glowColor ? { enabled: true, color: glowColor, size: 8, x: 0, y: 0 } : { enabled: false },
+      };
+    }
+
+    function makeEdgeItem(e, i) {
+      return {
+        id: i,
+        from: e.from,
+        to: e.to,
+        label: e.label || '',
+        color: { color: '#334', highlight: '#58a6ff', hover: '#58a6ff' },
+        font: { color: '#666', size: 9, face: 'monospace', background: '#0d1117', strokeWidth: 0 },
+        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        smooth: { type: 'curvedCW', roundness: 0.15 },
+        width: 1,
+      };
+    }
+
+    async function fetchStatus() {
+      const resp = await fetch('/system-status');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }
+
+    function countsByStatus(nodes) {
+      const counts = { active: 0, failed: 0, inactive: 0, other: 0 };
+      for (const n of nodes) {
+        if (n.status === 'active') counts.active++;
+        else if (n.status === 'failed') counts.failed++;
+        else if (n.status === 'inactive') counts.inactive++;
+        else counts.other++;
+      }
+      return counts;
+    }
+
+    async function loadTopology() {
+      const loadingEl = document.getElementById('loading');
+      const countsEl = document.getElementById('node-counts');
+      loadingEl.style.display = 'block';
+      countsEl.textContent = 'loading...';
+      try {
+        const data = await fetchStatus();
+        loadingEl.style.display = 'none';
+        renderTopology(data);
+        const c = countsByStatus(data.nodes);
+        countsEl.textContent =
+          data.nodes.length + ' services  |  ' +
+          c.active + ' active  |  ' +
+          (c.failed + c.inactive) + ' down';
+      } catch (e) {
+        loadingEl.textContent = 'Error: ' + e.message;
+        countsEl.textContent = 'error';
+      }
+    }
+
+    function renderTopology(data) {
+      const canvasEl = document.getElementById('graph-canvas');
+      const visNodes = data.nodes.map(makeNodeItem);
+      const visEdges = data.edges.map(makeEdgeItem);
+
+      const options = {
+        physics: {
+          enabled: true,
+          solver: 'forceAtlas2Based',
+          forceAtlas2Based: {
+            gravitationalConstant: -60,
+            centralGravity: 0.008,
+            springLength: 140,
+            springConstant: 0.06,
+            damping: 0.45,
+          },
+          stabilization: { iterations: 200, fit: true },
+        },
+        interaction: {
+          hover: true,
+          tooltipDelay: 80,
+          navigationButtons: false,
+          zoomView: true,
+          dragView: true,
+        },
+        layout: { improvedLayout: true },
+        nodes: { shape: 'dot' },
+        edges: { width: 1, selectionWidth: 2 },
+        background: { color: '#0d1117' },
+      };
+
+      nodesDS = new vis.DataSet(visNodes);
+      edgesDS = new vis.DataSet(visEdges);
+
+      if (topoNetwork) topoNetwork.destroy();
+      topoNetwork = new vis.Network(canvasEl, { nodes: nodesDS, edges: edgesDS }, options);
+      topoNetwork.once('stabilizationIterationsDone', () => {
+        topoNetwork.setOptions({ physics: { stabilization: false } });
+      });
+    }
+
+    async function refreshTopology() {
+      if (!topoNetwork || !nodesDS || !edgesDS) {
+        await loadTopology();
+        return;
+      }
+      const countsEl = document.getElementById('node-counts');
+      try {
+        const data = await fetchStatus();
+
+        // Update or add nodes
+        const incomingNodeIds = new Set(data.nodes.map(n => n.id));
+        const removedNodeIds = nodesDS.getIds().filter(id => !incomingNodeIds.has(id));
+        if (removedNodeIds.length) nodesDS.remove(removedNodeIds);
+        nodesDS.update(data.nodes.map(makeNodeItem));
+
+        // Update edges
+        const incomingEdgeIds = new Set(data.edges.map((_, i) => i));
+        const removedEdgeIds = edgesDS.getIds().filter(id => !incomingEdgeIds.has(id));
+        if (removedEdgeIds.length) edgesDS.remove(removedEdgeIds);
+        edgesDS.update(data.edges.map(makeEdgeItem));
+
+        const c = countsByStatus(data.nodes);
+        countsEl.textContent =
+          data.nodes.length + ' services  |  ' +
+          c.active + ' active  |  ' +
+          (c.failed + c.inactive) + ' down';
+        pulseCountdown();
+      } catch (e) {
+        countsEl.textContent = 'refresh error';
+      }
+    }
+
+    function fitGraph() {
+      if (topoNetwork) topoNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+    }
+
+    function pulseCountdown() {
+      const el = document.getElementById('refresh-countdown');
+      el.classList.add('pulse');
+      setTimeout(() => el.classList.remove('pulse'), 600);
+    }
+
+    function updateCountdown() {
+      const el = document.getElementById('refresh-countdown');
+      el.textContent = 'auto-refresh: ' + autoRefreshCountdown + 's';
+    }
+
+    function startAutoRefresh() {
+      autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+      updateCountdown();
+
+      countdownTimer = setInterval(() => {
+        autoRefreshCountdown -= 1;
+        if (autoRefreshCountdown < 0) autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+        updateCountdown();
+      }, 1000);
+
+      refreshTimer = setInterval(async () => {
+        autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+        updateCountdown();
+        await refreshTopology();
+      }, AUTO_REFRESH_INTERVAL * 1000);
+    }
+
+    loadTopology().then(startAutoRefresh);
+  </script>
+</body>
+</html>
