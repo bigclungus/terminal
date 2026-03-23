@@ -289,7 +289,126 @@ HTML = r"""<!DOCTYPE html>
       flex-shrink: 0;
       letter-spacing: 0.05em;
       text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
+    #agents-header .panel-refresh {
+      margin-left: auto;
+      cursor: pointer;
+      color: #555;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0 2px;
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: normal;
+      user-select: none;
+    }
+    #agents-header .panel-refresh:hover { color: #e94560; }
+    #gh-tasks-panel {
+      flex-shrink: 0;
+      border-bottom: 2px solid #2a2a4e;
+      display: flex;
+      flex-direction: column;
+      max-height: 55%;
+      overflow: hidden;
+    }
+    #gh-tasks-header {
+      padding: 8px 14px;
+      color: #58a6ff;
+      font-size: 11px;
+      font-weight: bold;
+      border-bottom: 1px solid #2a2a4e;
+      flex-shrink: 0;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #0d1117;
+    }
+    #gh-tasks-refresh {
+      margin-left: auto;
+      cursor: pointer;
+      color: #555;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0 2px;
+      user-select: none;
+    }
+    #gh-tasks-refresh:hover { color: #58a6ff; }
+    #gh-tasks-list {
+      overflow-y: auto;
+      padding: 6px;
+      background: #0d0d1a;
+    }
+    #gh-tasks-list::-webkit-scrollbar { width: 4px; }
+    #gh-tasks-list::-webkit-scrollbar-track { background: #0d0d1a; }
+    #gh-tasks-list::-webkit-scrollbar-thumb { background: #58a6ff; border-radius: 2px; }
+    .gh-group-label {
+      color: #555;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 4px 4px 2px;
+      font-weight: bold;
+    }
+    .gh-item {
+      background: #111122;
+      border: 1px solid #1e2236;
+      border-radius: 3px;
+      padding: 5px 8px;
+      margin-bottom: 4px;
+      font-size: 10px;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .gh-item:hover { border-color: #58a6ff; }
+    .gh-badge {
+      font-size: 9px;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-weight: bold;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .gh-badge.inprogress { background: #7c3aed22; color: #a78bfa; border: 1px solid #7c3aed; }
+    .gh-badge.todo { background: #1e3a5f22; color: #58a6ff; border: 1px solid #1e3a5f; }
+    .gh-badge.done { background: #14532d22; color: #4caf50; border: 1px solid #14532d; }
+    .gh-badge.other { background: #3a2a0022; color: #f0c040; border: 1px solid #3a2a00; }
+    .gh-title {
+      flex: 1;
+      color: #c0c0d0;
+      line-height: 1.4;
+      overflow: hidden;
+    }
+    .gh-title a {
+      color: #c0c0d0;
+      text-decoration: none;
+    }
+    .gh-title a:hover { color: #58a6ff; text-decoration: underline; }
+    .gh-age {
+      color: #444;
+      font-size: 9px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .gh-empty {
+      color: #444;
+      font-size: 11px;
+      text-align: center;
+      padding: 16px 8px;
+    }
+    .gh-done-toggle {
+      color: #444;
+      font-size: 9px;
+      cursor: pointer;
+      text-align: center;
+      padding: 3px;
+    }
+    .gh-done-toggle:hover { color: #58a6ff; }
     #agents-list {
       flex: 1;
       overflow-y: auto;
@@ -524,12 +643,6 @@ HTML = r"""<!DOCTYPE html>
       <span class="hb-val" id="hb-swap-val">--</span>
     </div>
     <div class="hb-sep">|</div>
-    <div class="hb-metric">
-      <span class="hb-label" style="min-width:52px">OpenAI</span>
-      <div class="hb-bar-wrap" style="width:80px"><div class="hb-bar-fill" id="hb-openai-bar" style="width:0%"></div></div>
-      <span class="hb-val" id="hb-openai-val" style="min-width:100px">--</span>
-    </div>
-    <div class="hb-sep">|</div>
     <div class="hb-svc">
       <div class="hb-dot" id="hb-dot-cloudflared"></div>
       <span>cloudflared</span>
@@ -544,6 +657,15 @@ HTML = r"""<!DOCTYPE html>
   <div id="main">
     <div id="terminal"></div>
     <div id="agents">
+      <div id="gh-tasks-panel">
+        <div id="gh-tasks-header">
+          &#x2B50; GitHub Project
+          <span id="gh-tasks-refresh" title="Refresh">&#x21BB;</span>
+        </div>
+        <div id="gh-tasks-list">
+          <div class="gh-empty">Loading...</div>
+        </div>
+      </div>
       <div id="agents-header">&#x25A3; Subagent Tasks</div>
       <div id="agents-list">
         <div id="agents-empty">No recent tasks</div>
@@ -596,6 +718,110 @@ HTML = r"""<!DOCTYPE html>
       ws.onerror = () => ws.close();
     }
     connect();
+
+    // GitHub Project tasks panel
+    function ghRelativeTime(isoStr) {
+      if (!isoStr) return '';
+      const secs = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
+      if (secs < 60) return secs + 's ago';
+      if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+      if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+      return Math.floor(secs / 86400) + 'd ago';
+    }
+
+    function ghBadgeClass(status) {
+      const s = (status || '').toLowerCase();
+      if (s === 'in progress') return 'inprogress';
+      if (s === 'todo') return 'todo';
+      if (s === 'done') return 'done';
+      return 'other';
+    }
+
+    let ghDoneExpanded = false;
+
+    function renderGhTasks(items) {
+      const list = document.getElementById('gh-tasks-list');
+      if (!items || items.length === 0) {
+        list.innerHTML = '<div class="gh-empty">No project items found</div>';
+        return;
+      }
+
+      const groups = { 'In Progress': [], 'Todo': [], 'Done': [], '_other': [] };
+      for (const item of items) {
+        const s = item.status || 'No Status';
+        if (s === 'In Progress') groups['In Progress'].push(item);
+        else if (s === 'Todo') groups['Todo'].push(item);
+        else if (s === 'Done') groups['Done'].push(item);
+        else groups['_other'].push(item);
+      }
+
+      let html = '';
+
+      function renderGroup(label, groupItems, badgeCls) {
+        if (!groupItems.length) return '';
+        let out = `<div class="gh-group-label">${escHtml(label)} (${groupItems.length})</div>`;
+        for (const item of groupItems) {
+          const age = ghRelativeTime(item.updatedAt || item.createdAt);
+          const titleHtml = item.url
+            ? `<a href="${escHtml(item.url)}" target="_blank">${escHtml(item.title)}</a>`
+            : escHtml(item.title);
+          out += `<div class="gh-item">
+            <span class="gh-badge ${badgeCls}">${escHtml(item.status || '?')}</span>
+            <span class="gh-title">${titleHtml}</span>
+            <span class="gh-age">${escHtml(age)}</span>
+          </div>`;
+        }
+        return out;
+      }
+
+      html += renderGroup('In Progress', groups['In Progress'], 'inprogress');
+      html += renderGroup('Todo', groups['Todo'], 'todo');
+      if (groups['_other'].length) html += renderGroup('Other', groups['_other'], 'other');
+
+      // Done: collapsed by default, show last 5
+      if (groups['Done'].length) {
+        const shown = ghDoneExpanded ? groups['Done'] : groups['Done'].slice(0, 5);
+        html += renderGroup('Done', shown, 'done');
+        if (groups['Done'].length > 5) {
+          const label = ghDoneExpanded
+            ? '▲ collapse done'
+            : `▼ show all ${groups['Done'].length} done`;
+          html += `<div class="gh-done-toggle" id="gh-done-toggle">${label}</div>`;
+        }
+      }
+
+      list.innerHTML = html;
+
+      const toggle = document.getElementById('gh-done-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', () => {
+          ghDoneExpanded = !ghDoneExpanded;
+          renderGhTasks(lastGhItems);
+        });
+      }
+    }
+
+    let lastGhItems = null;
+
+    async function pollGhTasks() {
+      try {
+        const resp = await fetch('/github-tasks');
+        if (resp.ok) {
+          lastGhItems = await resp.json();
+          renderGhTasks(lastGhItems);
+        }
+      } catch (e) {
+        // silently ignore
+      }
+    }
+
+    document.getElementById('gh-tasks-refresh').addEventListener('click', () => {
+      if (window.GCSounds) GCSounds.click();
+      pollGhTasks();
+    });
+
+    pollGhTasks();
+    setInterval(pollGhTasks, 15000);
 
     // Agent task panel
     function relativeTime(mtime) {
@@ -762,16 +988,6 @@ HTML = r"""<!DOCTYPE html>
       val.textContent = label;
     }
 
-    function setOpenAIBar(spend, limit) {
-      const bar = document.getElementById('hb-openai-bar');
-      const val = document.getElementById('hb-openai-val');
-      if (!bar || !val) return;
-      const pct = limit > 0 ? Math.min(100, (spend / limit) * 100) : 0;
-      bar.style.width = pct + '%';
-      bar.className = 'hb-bar-fill' + (pct >= 80 ? ' crit' : pct >= 50 ? ' warn' : '');
-      val.textContent = '$' + spend.toFixed(2) + ' / $' + limit.toFixed(2);
-    }
-
     function setDot(id, ok) {
       const el = document.getElementById(id);
       if (!el) return;
@@ -787,7 +1003,6 @@ HTML = r"""<!DOCTYPE html>
         setBar('hb-ram-bar', 'hb-ram-val', d.ram.percent, d.ram.percent.toFixed(1) + '%');
         setBar('hb-disk-bar', 'hb-disk-val', d.disk.percent, d.disk.percent.toFixed(1) + '%');
         setBar('hb-swap-bar', 'hb-swap-val', d.swap.percent, d.swap.percent.toFixed(1) + '%');
-        if (d.openai_spend !== undefined) setOpenAIBar(d.openai_spend, d.openai_limit || 10.0);
         setDot('hb-dot-cloudflared', d.services.cloudflared);
         setDot('hb-dot-terminal', d.services['terminal-server']);
         document.getElementById('hb-uptime').textContent = 'up ' + d.uptime;
@@ -1242,10 +1457,6 @@ async def health_handler(request):
         'terminal-server': check_service_running('terminal-server'),
     }
 
-    # OpenAI spend
-    data['openai_spend'] = await fetch_openai_spend()
-    data['openai_limit'] = OPENAI_SPEND_LIMIT
-
     return web.Response(
         text=json.dumps(data),
         content_type='application/json',
@@ -1662,6 +1873,64 @@ async def cost_data_handler(request):
     )
 
 
+# ── GitHub Project Tasks Cache ────────────────────────────────────────────────
+_github_tasks_cache: dict = {'data': None, 'ts': 0.0}
+
+
+def _fetch_github_tasks() -> list:
+    """Run gh project item-list and return parsed items."""
+    try:
+        result = subprocess.run(
+            ['gh', 'project', 'item-list', '1', '--owner', 'BigClungus',
+             '--format', 'json', '--limit', '50'],
+            capture_output=True, text=True, timeout=15,
+            env={**os.environ, 'HOME': '/home/clungus'},
+        )
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout)
+        items = data.get('items', [])
+        parsed = []
+        for item in items:
+            content = item.get('content') or {}
+            url = content.get('url', '')
+            number = content.get('number')
+            created_at = content.get('createdAt', '')
+            updated_at = content.get('updatedAt', '')
+            labels = [l.get('name', '') if isinstance(l, dict) else str(l)
+                      for l in (item.get('labels') or [])]
+            parsed.append({
+                'id': item.get('id', ''),
+                'title': item.get('title', ''),
+                'status': item.get('status', 'No Status'),
+                'url': url,
+                'number': number,
+                'createdAt': created_at,
+                'updatedAt': updated_at,
+                'labels': labels,
+            })
+        return parsed
+    except Exception as exc:
+        print(f'[github-tasks] error: {exc}')
+        return []
+
+
+async def github_tasks_handler(request):
+    now = time.time()
+    if now - _github_tasks_cache['ts'] < 10 and _github_tasks_cache['data'] is not None:
+        items = _github_tasks_cache['data']
+    else:
+        loop = asyncio.get_event_loop()
+        items = await loop.run_in_executor(None, _fetch_github_tasks)
+        _github_tasks_cache['data'] = items
+        _github_tasks_cache['ts'] = now
+    return web.Response(
+        text=json.dumps(items),
+        content_type='application/json',
+        headers={'Cache-Control': 'no-cache'},
+    )
+
+
 RESTART_PASSWORD = os.environ.get('RESTART_PASSWORD', '')
 
 async def restart_bot_handler(request):
@@ -1889,6 +2158,7 @@ app.router.add_get('/graph', graph_page_handler)
 app.router.add_get('/ingestion-status', ingestion_status_handler)
 app.router.add_get('/ws', websocket_handler)
 app.router.add_get('/tasks', tasks_handler)
+app.router.add_get('/github-tasks', github_tasks_handler)
 app.router.add_get('/task-output/{agentId}', task_output_handler)
 app.router.add_post('/meta/{agentId}', meta_handler)
 app.router.add_post('/restart-bot', restart_bot_handler)
