@@ -8,60 +8,105 @@ import glob
 import json
 import os
 import re
+import secrets
 import subprocess
 import time
 import urllib.request
 import falkordb as _fdb
 from datetime import datetime, timezone
-from aiohttp import web
+from aiohttp import web, ClientSession
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-AUTH_PASSWORD = os.environ.get('AUTH_PASSWORD', '')
-AUTH_COOKIE   = "tauth"
+AUTH_PASSWORD  = os.environ.get('AUTH_PASSWORD', '')
+AUTH_COOKIE    = "tauth"
+GITHUB_COOKIE  = "tauth_github"
 COOKIE_MAX_AGE = 86400  # 24 hours
+
+# GitHub OAuth — only active when GITHUB_CLIENT_ID is set
+GITHUB_CLIENT_ID      = os.environ.get('GITHUB_CLIENT_ID', '')
+GITHUB_CLIENT_SECRET  = os.environ.get('GITHUB_CLIENT_SECRET', '')
+GITHUB_ALLOWED_USERS  = set(os.environ.get('GITHUB_ALLOWED_USERS', '').split(',')) - {''}
+
+_GITHUB_BTN = """
+    <a href="/auth/github" class="github-btn">
+      <svg height="16" viewBox="0 0 16 16" width="16" style="fill:#fff;vertical-align:middle;margin-right:8px;">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+          0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
+          -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
+          .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
+          -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0
+          1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82
+          1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01
+          1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      Sign in with GitHub
+    </a>"""
+
+_LOGIN_STYLES = """
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#0d0d0d; color:#d4d4d4; font-family:monospace;
+           display:flex; align-items:center; justify-content:center; height:100vh; }
+    .box { background:#1a1a2e; border:1px solid #e94560; border-radius:6px;
+           padding:32px 40px; min-width:300px; text-align:center; }
+    h2 { color:#e94560; margin-bottom:20px; font-size:16px; letter-spacing:.05em; }
+    input[type=password] { width:100%; padding:8px 10px; background:#0d0d0d;
+      border:1px solid #2a2a4e; color:#d4d4d4; font-family:monospace;
+      font-size:14px; border-radius:3px; margin-bottom:12px; outline:none; }
+    input[type=password]:focus { border-color:#e94560; }
+    button { width:100%; padding:9px; background:#e94560; color:#fff;
+             border:none; border-radius:3px; font-family:monospace;
+             font-size:14px; cursor:pointer; }
+    button:hover { background:#c73050; }
+    .err { color:#e94560; font-size:12px; margin-top:10px; }
+    .github-btn { display:flex; align-items:center; justify-content:center;
+      width:100%; padding:9px; background:#238636; color:#fff; text-decoration:none;
+      border-radius:3px; font-family:monospace; font-size:14px; cursor:pointer;
+      border:1px solid #2ea043; margin-bottom:12px; }
+    .github-btn:hover { background:#2ea043; }
+    .divider { color:#444; font-size:11px; margin:12px 0; }"""
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Login — BigClungus Terminal</title>
+  <title>Login \u2014 BigClungus Terminal</title>
   <style>
-    * {{ margin:0; padding:0; box-sizing:border-box; }}
-    body {{ background:#0d0d0d; color:#d4d4d4; font-family:monospace;
-           display:flex; align-items:center; justify-content:center; height:100vh; }}
-    .box {{ background:#1a1a2e; border:1px solid #e94560; border-radius:6px;
-           padding:32px 40px; min-width:300px; text-align:center; }}
-    h2 {{ color:#e94560; margin-bottom:20px; font-size:16px; letter-spacing:.05em; }}
-    input[type=password] {{ width:100%; padding:8px 10px; background:#0d0d0d;
-      border:1px solid #2a2a4e; color:#d4d4d4; font-family:monospace;
-      font-size:14px; border-radius:3px; margin-bottom:12px; outline:none; }}
-    input[type=password]:focus {{ border-color:#e94560; }}
-    button {{ width:100%; padding:9px; background:#e94560; color:#fff;
-             border:none; border-radius:3px; font-family:monospace;
-             font-size:14px; cursor:pointer; }}
-    button:hover {{ background:#c73050; }}
-    .err {{ color:#e94560; font-size:12px; margin-top:10px; }}
+{styles}
   </style>
 </head>
 <body>
   <div class="box">
     <h2>&#x1F916; BigClungus Terminal</h2>
-    <form method="POST" action="/login">
-      <input type="password" name="password" placeholder="Password" autofocus>
-      <button type="submit">Enter</button>
-      {error}
-    </form>
+{body}
   </div>
 </body>
 </html>"""
 
 
+def _build_login_page(error=''):
+    if GITHUB_CLIENT_ID:
+        body = _GITHUB_BTN
+        if AUTH_PASSWORD:
+            body += '\n    <div class="divider">— or —</div>'
+            body += """
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password">
+      <button type="submit">Enter</button>
+      {error}
+    </form>""".format(error=error)
+    else:
+        body = """
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password" autofocus>
+      <button type="submit">Enter</button>
+      {error}
+    </form>""".format(error=error)
+    return LOGIN_HTML.format(styles=_LOGIN_STYLES, body=body)
+
+
 async def login_handler(request):
     if request.method == 'GET':
-        return web.Response(
-            text=LOGIN_HTML.format(error=''),
-            content_type='text/html',
-        )
+        return web.Response(text=_build_login_page(), content_type='text/html')
     # POST — check password
     try:
         data = await request.post()
@@ -78,20 +123,94 @@ async def login_handler(request):
         )
         return resp
     return web.Response(
-        text=LOGIN_HTML.format(error='<p class="err">Wrong password.</p>'),
+        text=_build_login_page(error='<p class="err">Wrong password.</p>'),
         content_type='text/html',
         status=401,
     )
 
 
+async def github_auth_handler(request):
+    """Redirect user to GitHub OAuth authorization page."""
+    state = secrets.token_urlsafe(16)
+    url = (
+        f'https://github.com/login/oauth/authorize'
+        f'?client_id={GITHUB_CLIENT_ID}&scope=read:user&state={state}'
+    )
+    resp = web.HTTPFound(url)
+    resp.set_cookie('gh_oauth_state', state, max_age=600, httponly=True, samesite='Lax')
+    return resp
+
+
+async def github_callback_handler(request):
+    """Handle GitHub OAuth callback, exchange code for token, verify user."""
+    code  = request.rel_url.query.get('code', '')
+    state = request.rel_url.query.get('state', '')
+    expected_state = request.cookies.get('gh_oauth_state', '')
+
+    if not code or not state or state != expected_state:
+        raise web.HTTPForbidden(reason='OAuth state mismatch')
+
+    async with ClientSession() as session:
+        # Exchange code for access token
+        token_resp = await session.post(
+            'https://github.com/login/oauth/access_token',
+            json={
+                'client_id':     GITHUB_CLIENT_ID,
+                'client_secret': GITHUB_CLIENT_SECRET,
+                'code':          code,
+            },
+            headers={'Accept': 'application/json'},
+        )
+        token_data = await token_resp.json()
+        access_token = token_data.get('access_token', '')
+
+        if not access_token:
+            raise web.HTTPForbidden(reason='Failed to obtain access token')
+
+        # Get GitHub username
+        user_resp = await session.get(
+            'https://api.github.com/user',
+            headers={
+                'Authorization': f'token {access_token}',
+                'Accept': 'application/json',
+            },
+        )
+        user_data = await user_resp.json()
+        username = user_data.get('login', '')
+
+    if not username:
+        raise web.HTTPForbidden(reason='Could not determine GitHub username')
+
+    if GITHUB_ALLOWED_USERS and username not in GITHUB_ALLOWED_USERS:
+        raise web.HTTPForbidden(reason=f'GitHub user {username!r} is not allowed')
+
+    resp = web.HTTPFound('/')
+    resp.set_cookie(
+        GITHUB_COOKIE, username,
+        max_age=COOKIE_MAX_AGE,
+        httponly=True,
+        samesite='Lax',
+    )
+    # Clear the OAuth state cookie
+    resp.del_cookie('gh_oauth_state')
+    return resp
+
+
 def _is_authed(request):
-    return request.cookies.get(AUTH_COOKIE) == 'ok'
+    # Accept either password cookie or GitHub OAuth cookie
+    if request.cookies.get(AUTH_COOKIE) == 'ok':
+        return True
+    gh_user = request.cookies.get(GITHUB_COOKIE, '')
+    if gh_user:
+        if not GITHUB_ALLOWED_USERS or gh_user in GITHUB_ALLOWED_USERS:
+            return True
+    return False
 
 
 @web.middleware
 async def auth_middleware(request, handler):
     path = request.path
-    if path == '/login':
+    if path in ('/login', '/auth/github', '/auth/callback'):
         return await handler(request)
     if not _is_authed(request):
         raise web.HTTPFound('/login')
@@ -1710,6 +1829,8 @@ async def ingestion_status_handler(request):
 app = web.Application(middlewares=[auth_middleware])
 app.router.add_get('/login', login_handler)
 app.router.add_post('/login', login_handler)
+app.router.add_get('/auth/github', github_auth_handler)
+app.router.add_get('/auth/callback', github_callback_handler)
 app.router.add_get('/', index)
 app.router.add_get('/health', health_handler)
 app.router.add_get('/graph-data', graph_data_handler)
