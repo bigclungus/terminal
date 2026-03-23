@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
+  <title>Knowledge Graph — BigClungus</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+      font-family: monospace;
+    }
+    #graph-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+    #toolbar {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.82);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 6px 10px;
+      backdrop-filter: blur(4px);
+    }
+    .graph-btn {
+      background: #161628;
+      border: 1px solid #2a2a4e;
+      color: #aaa;
+      font-size: 10px;
+      padding: 3px 8px;
+      cursor: pointer;
+      border-radius: 3px;
+      font-family: monospace;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .graph-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    #back-link {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.82);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 5px 10px;
+      backdrop-filter: blur(4px);
+    }
+    #back-link a {
+      color: #8b949e;
+      text-decoration: none;
+      font-size: 11px;
+      font-family: monospace;
+      transition: color 0.15s;
+    }
+    #back-link a:hover { color: #58a6ff; }
+    #counts {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 20;
+      background: rgba(13, 17, 23, 0.82);
+      border: 1px solid #2a2a4e;
+      border-radius: 5px;
+      padding: 6px 12px;
+      backdrop-filter: blur(4px);
+      color: #8b949e;
+      font-size: 11px;
+      font-family: monospace;
+    }
+    #loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #58a6ff;
+      font-size: 13px;
+      font-family: monospace;
+      z-index: 30;
+      pointer-events: none;
+    }
+    #auto-refresh-indicator {
+      font-size: 10px;
+      font-family: monospace;
+      color: #3fb950;
+      opacity: 0.7;
+      white-space: nowrap;
+      padding-left: 4px;
+      border-left: 1px solid #2a2a4e;
+      margin-left: 2px;
+      transition: opacity 0.2s;
+    }
+    #auto-refresh-indicator.pulse {
+      opacity: 1;
+      color: #56d364;
+    }
+  </style>
+</head>
+<body>
+  <div id="graph-canvas"></div>
+  <div id="toolbar">
+    <button class="graph-btn" onclick="refreshGraph()">Refresh</button>
+    <button class="graph-btn" onclick="fitGraph()">Fit</button>
+    <span id="auto-refresh-indicator">auto-refresh: 60s</span>
+  </div>
+  <div id="counts">loading...</div>
+  <div id="back-link"><a href="/">&#x2190; terminal</a></div>
+  <div id="loading">Loading graph...</div>
+
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script>
+    const GROUP_COLORS = {
+      Organization: { background: '#58a6ff', border: '#1f6feb', highlight: { background: '#79b8ff', border: '#58a6ff' } },
+      Object:       { background: '#3fb950', border: '#238636', highlight: { background: '#56d364', border: '#3fb950' } },
+      Topic:        { background: '#d29922', border: '#9e6a03', highlight: { background: '#e3b341', border: '#d29922' } },
+      Location:     { background: '#bc8cff', border: '#8957e5', highlight: { background: '#d2a8ff', border: '#bc8cff' } },
+      Document:     { background: '#f85149', border: '#cf222e', highlight: { background: '#ffa198', border: '#f85149' } },
+      Preference:   { background: '#79c0ff', border: '#388bfd', highlight: { background: '#a5d6ff', border: '#79c0ff' } },
+      Entity:       { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } },
+    };
+
+    const DEFAULT_COLOR = { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } };
+
+    let graphNetwork = null;
+    let nodesDS = null;
+    let edgesDS = null;
+
+    // Auto-refresh state
+    const AUTO_REFRESH_INTERVAL = 60; // seconds
+    let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+    let autoRefreshTimer = null;
+    let countdownTimer = null;
+
+    function makeNodeItem(n) {
+      return {
+        id: n.id,
+        label: n.label,
+        title: n.title,
+        color: GROUP_COLORS[n.group] || DEFAULT_COLOR,
+        font: { color: '#e6edf3', size: 11, face: 'monospace' },
+        borderWidth: 1,
+        size: 16,
+      };
+    }
+
+    function makeEdgeItem(e, i) {
+      return {
+        id: i,
+        from: e.from,
+        to: e.to,
+        label: e.label,
+        title: e.title,
+        color: { color: '#444', highlight: '#58a6ff', hover: '#58a6ff' },
+        font: { color: '#888', size: 9, face: 'monospace', background: '#0d1117', strokeWidth: 0 },
+        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        smooth: { type: 'dynamic' },
+      };
+    }
+
+    async function fetchGraphData() {
+      const resp = await fetch('/graph-data');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }
+
+    async function loadGraph() {
+      const loadingEl = document.getElementById('loading');
+      const countsEl = document.getElementById('counts');
+      loadingEl.style.display = 'block';
+      countsEl.textContent = 'loading...';
+      try {
+        const data = await fetchGraphData();
+        loadingEl.style.display = 'none';
+        renderGraph(data);
+        countsEl.textContent = data.nodes.length + ' nodes  |  ' + data.edges.length + ' edges';
+      } catch (e) {
+        loadingEl.textContent = 'Error: ' + e.message;
+        countsEl.textContent = 'error';
+      }
+    }
+
+    function renderGraph(data) {
+      const canvasEl = document.getElementById('graph-canvas');
+
+      const visNodes = data.nodes.map(makeNodeItem);
+      const visEdges = data.edges.map(makeEdgeItem);
+
+      const options = {
+        physics: {
+          enabled: true,
+          solver: 'forceAtlas2Based',
+          forceAtlas2Based: {
+            gravitationalConstant: -50,
+            centralGravity: 0.01,
+            springLength: 100,
+            springConstant: 0.08,
+            damping: 0.4,
+          },
+          stabilization: { iterations: 150, fit: true },
+        },
+        interaction: {
+          hover: true,
+          tooltipDelay: 100,
+          navigationButtons: false,
+          zoomView: true,
+          dragView: true,
+        },
+        layout: {
+          improvedLayout: true,
+        },
+        nodes: {
+          shape: 'dot',
+        },
+        edges: {
+          width: 1,
+          selectionWidth: 2,
+        },
+        background: { color: '#0d1117' },
+      };
+
+      nodesDS = new vis.DataSet(visNodes);
+      edgesDS = new vis.DataSet(visEdges);
+
+      if (graphNetwork) {
+        graphNetwork.destroy();
+      }
+      graphNetwork = new vis.Network(canvasEl, { nodes: nodesDS, edges: edgesDS }, options);
+      graphNetwork.once('stabilizationIterationsDone', () => {
+        graphNetwork.setOptions({ physics: { stabilization: false } });
+      });
+    }
+
+    async function refreshGraph() {
+      if (!graphNetwork || !nodesDS || !edgesDS) {
+        await loadGraph();
+        return;
+      }
+      const countsEl = document.getElementById('counts');
+      try {
+        const data = await fetchGraphData();
+
+        // Build lookup maps for incoming data
+        const incomingNodeIds = new Set(data.nodes.map(n => n.id));
+        const incomingEdgeIds = new Set(data.edges.map((_, i) => i));
+
+        // Remove nodes/edges no longer present
+        const removedNodeIds = nodesDS.getIds().filter(id => !incomingNodeIds.has(id));
+        const removedEdgeIds = edgesDS.getIds().filter(id => !incomingEdgeIds.has(id));
+        if (removedNodeIds.length) nodesDS.remove(removedNodeIds);
+        if (removedEdgeIds.length) edgesDS.remove(removedEdgeIds);
+
+        // Update or add nodes
+        const nodeUpdates = data.nodes.map(makeNodeItem);
+        nodesDS.update(nodeUpdates);
+
+        // Update or add edges
+        const edgeUpdates = data.edges.map(makeEdgeItem);
+        edgesDS.update(edgeUpdates);
+
+        countsEl.textContent = data.nodes.length + ' nodes  |  ' + data.edges.length + ' edges';
+        pulseIndicator();
+      } catch (e) {
+        countsEl.textContent = 'refresh error';
+      }
+    }
+
+    function fitGraph() {
+      if (graphNetwork) graphNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+    }
+
+    // Auto-refresh indicator + countdown
+
+    function pulseIndicator() {
+      const el = document.getElementById('auto-refresh-indicator');
+      el.classList.add('pulse');
+      setTimeout(() => el.classList.remove('pulse'), 600);
+    }
+
+    function updateIndicator() {
+      const el = document.getElementById('auto-refresh-indicator');
+      el.textContent = 'auto-refresh: ' + autoRefreshCountdown + 's';
+    }
+
+    function startAutoRefresh() {
+      autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+      updateIndicator();
+
+      // Tick every second for the countdown display
+      countdownTimer = setInterval(() => {
+        autoRefreshCountdown -= 1;
+        if (autoRefreshCountdown < 0) autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+        updateIndicator();
+      }, 1000);
+
+      // Actual refresh every 60 seconds
+      autoRefreshTimer = setInterval(async () => {
+        autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+        updateIndicator();
+        await refreshGraph();
+      }, AUTO_REFRESH_INTERVAL * 1000);
+    }
+
+    loadGraph().then(startAutoRefresh);
+  </script>
+</body>
+</html>
