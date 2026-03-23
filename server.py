@@ -9,6 +9,7 @@ import os
 import subprocess
 import time
 import urllib.request
+import falkordb as _fdb
 from aiohttp import web
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -110,6 +111,7 @@ HTML = r"""<!DOCTYPE html>
   <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
   <title>BigClungus Live Terminal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0d0d0d; display: flex; flex-direction: column; height: 100vh; font-family: monospace; }
@@ -269,6 +271,14 @@ HTML = r"""<!DOCTYPE html>
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .task-requester {
+      color: #6b5ce7;
+      font-size: 10px;
+      flex-shrink: 0;
     }
     .task-summary {
       color: #777;
@@ -509,6 +519,10 @@ HTML = r"""<!DOCTYPE html>
       return str.replace(/\x1B\[[0-9;]*[mGKHF]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
     }
 
+    function escHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     const expandedCards = new Set();
 
     async function toggleCardExpand(card) {
@@ -573,7 +587,8 @@ HTML = r"""<!DOCTYPE html>
           card.dataset.id = task.id;
         }
         const summary = stripAnsi(task.summary || '').trim();
-        const desc = task.description ? `<div class="task-description">${task.description}</div>` : '';
+        const requesterHtml = task.requester ? `<span class="task-requester">@${escHtml(task.requester)}</span>` : '';
+        const desc = task.description ? `<div class="task-description">${task.description}${requesterHtml}</div>` : '';
         const wasExpanded = expandedCards.has(task.id);
         // Preserve loaded content across re-renders
         let loadedContent = null;
@@ -713,6 +728,12 @@ HTML = r"""<!DOCTYPE html>
       } catch (e) {
         alert('Request error: ' + e.message);
       }
+    });
+
+    // GameCube sounds on all buttons and nav links
+    document.querySelectorAll('button, #header a').forEach(function(el) {
+      el.addEventListener('mouseenter', function() { if (window.GCSounds) GCSounds.hover(); });
+      el.addEventListener('click', function() { if (window.GCSounds) GCSounds.click(); }, true);
     });
 
   </script>
@@ -855,11 +876,20 @@ async def tasks_handler(request):
         status = 'running' if mtime >= thirty_secs_ago else 'completed'
         description = get_task_description(agent_id, fpath)
 
+        requester = ''
+        meta_path = os.path.join(TASKS_DIR, agent_id + '.meta.json')
+        try:
+            with open(meta_path) as f:
+                requester = json.load(f).get('requester', '')
+        except (OSError, json.JSONDecodeError):
+            pass
+
         tasks.append({
             'id': agent_id,
             'status': status,
             'summary': summary,
             'description': description,
+            'requester': requester,
             'mtime': int(mtime),
         })
 
@@ -894,11 +924,12 @@ async def meta_handler(request):
     description = body.get('description', '').strip()
     if not description:
         return web.Response(status=400, text='Missing description field')
+    requester = body.get('requester', '').strip()
     meta_path = os.path.join(TASKS_DIR, agent_id + '.meta.json')
     try:
         os.makedirs(TASKS_DIR, exist_ok=True)
         with open(meta_path, 'w') as f:
-            json.dump({'description': description}, f)
+            json.dump({'description': description, 'requester': requester}, f)
     except OSError as e:
         return web.Response(status=500, text=str(e))
     return web.Response(text=json.dumps({'ok': True, 'agentId': agent_id, 'description': description}),
@@ -1133,7 +1164,106 @@ async def health_handler(request):
 
 
 GRAPHITI_GRAPHS = ['discord', 'infrastructure', 'discord-history', 'discord_history']
-FALKORDB_CONTAINER = 'graphiti-mcp'
+FALKORDB_CONTAINER = 'docker-falkordb-1'
+
+# Entity classifier — module-level constants so they're built once, not per-request.
+_ENTITY_PEOPLE = {
+    'jaboostin', 'justin', 'koole', 'graeme', 'centronias', 'bernie', 'biden',
+    'trump', 'musk', 'elon', 'elon musk', 'donald trump', 'joe biden',
+    'bernie sanders', 'harris', 'kamala', 'kamala harris', 'obama', 'pelosi',
+    'aoc', 'ocasio-cortez', 'zelensky', 'putin', 'xi jinping', 'xi', 'pope',
+    'pope francis', 'zuckerberg', 'mark zuckerberg', 'sam altman', 'altman',
+    'bezos', 'jeff bezos', 'cook', 'tim cook', 'sundar pichai',
+}
+_ENTITY_PLACES = {
+    'america', 'usa', 'us', 'united states', 'new york', 'texas', 'california',
+    'florida', 'ohio', 'michigan', 'pennsylvania', 'georgia', 'arizona',
+    'washington', 'dc', 'washington dc', 'canada', 'mexico', 'uk',
+    'united kingdom', 'europe', 'russia', 'china', 'ukraine', 'israel',
+    'gaza', 'taiwan', 'north korea', 'iran', 'iraq', 'afghanistan',
+    'san francisco', 'los angeles', 'chicago', 'boston', 'seattle',
+    'new jersey', 'brooklyn', 'manhattan', 'silicon valley',
+}
+_ENTITY_COMPANIES = {
+    'openai', 'anthropic', 'google', 'microsoft', 'meta', 'apple', 'amazon',
+    'tesla', 'spacex', 'twitter', 'x', 'discord', 'reddit', 'facebook',
+    'instagram', 'tiktok', 'youtube', 'netflix', 'uber', 'lyft',
+    'nvidia', 'amd', 'intel', 'qualcomm', 'arm', 'broadcom',
+    'palantir', 'oracle', 'ibm', 'salesforce', 'shopify', 'stripe',
+    'github', 'gitlab', 'atlassian', 'slack', 'zoom', 'twitch',
+    'bytedance', 'baidu', 'alibaba', 'tencent', 'huawei',
+    'nyt', 'new york times', 'cnn', 'fox', 'fox news', 'msnbc',
+    'bbc', 'reuters', 'ap', 'associated press', 'washington post',
+}
+_ENTITY_TECH = {
+    'ai', 'ml', 'llm', 'gpt', 'chatgpt', 'grok', 'gemini', 'claude',
+    'llama', 'mistral', 'deepseek', 'copilot', 'dall-e', 'midjourney',
+    'stable diffusion', 'neural network', 'machine learning',
+    'python', 'javascript', 'rust', 'golang', 'typescript',
+    'linux', 'windows', 'macos', 'android', 'ios',
+    'bitcoin', 'ethereum', 'crypto', 'nft', 'blockchain',
+    'docker', 'kubernetes', 'aws', 'gcp', 'azure', 'cloud',
+    'internet', 'web', 'api', 'github', 'open source',
+}
+_ENTITY_POLITICS = {
+    'congress', 'senate', 'house', 'democrat', 'republican', 'gop',
+    'election', 'vote', 'voting', 'ballot', 'primary', 'campaign',
+    'white house', 'president', 'vice president', 'secretary',
+    'supreme court', 'court', 'roe', 'abortion', 'immigration',
+    'nato', 'un', 'united nations', 'eu', 'european union',
+    'tariff', 'tariffs', 'trade war', 'sanctions', 'doge',
+    'maga', 'woke', 'progressive', 'conservative', 'liberal',
+    'left', 'right', 'socialism', 'capitalism', 'populism',
+    'fbi', 'cia', 'nsa', 'doj', 'fcc', 'sec', 'fed', 'federal reserve',
+}
+_ENTITY_SUMMARY_KEYWORDS = {
+    'Person':   ['person', 'user', 'developer', 'engineer', 'founder', 'ceo',
+                 'politician', 'activist', 'journalist', 'researcher', 'scientist',
+                 'actor', 'comedian', 'artist', 'streamer', 'youtuber'],
+    'Place':    ['country', 'city', 'state', 'region', 'location', 'territory',
+                 'nation', 'continent', 'island', 'coast', 'district', 'county'],
+    'Company':  ['company', 'corporation', 'startup', 'firm', 'organization',
+                 'platform', 'service', 'media', 'publication', 'outlet'],
+    'Tech':     ['technology', 'software', 'hardware', 'model', 'framework',
+                 'language', 'protocol', 'algorithm', 'database', 'system',
+                 'network', 'ai model', 'tool', 'library', 'cryptocurrency'],
+    'Politics': ['policy', 'political', 'legislation', 'bill', 'law', 'party',
+                 'movement', 'government', 'administration', 'department',
+                 'agency', 'bureau', 'committee', 'ideology'],
+}
+_DISCORD_USER_ALIASES = {
+    'justin':              'jaboostin',
+    'discord user':        'discord',
+    'americans':           'america',
+    'american':            'america',
+    'new york city':       'new york',
+    'new yorkers':         'new york',
+    'openai millionaires': 'openai',
+    'genai':               'ai',
+    'grok ai chatbot':     'grok',
+    'biden administration':'biden',
+    'bernie sanders':      'bernie',
+    'bernie bros':         'bernie',
+}
+
+
+def _classify_entity(name: str, summary: str) -> str:
+    n = (name or '').strip().lower()
+    s = (summary or '').lower()
+    if n in _ENTITY_PEOPLE:    return 'Person'
+    if n in _ENTITY_PLACES:    return 'Place'
+    if n in _ENTITY_COMPANIES: return 'Company'
+    if n in _ENTITY_TECH:      return 'Tech'
+    if n in _ENTITY_POLITICS:  return 'Politics'
+    for group, keywords in _ENTITY_SUMMARY_KEYWORDS.items():
+        if any(kw in s for kw in keywords):
+            return group
+    return 'Concept'
+
+
+def _user_dedup_key(label: str) -> str:
+    k = (label or '').strip().lower()
+    return _DISCORD_USER_ALIASES.get(k, k)
 
 
 def _run_falkordb_query(graph: str, query: str) -> list[str]:
@@ -1177,6 +1307,30 @@ def _parse_falkordb_table(raw_lines: list[str], num_cols: int) -> list[list[str]
     return rows
 
 
+def _query_graph(graph_name: str):
+    """Query a FalkorDB graph for entity nodes and edges (uses Python library for multi-line safety)."""
+    r = _fdb.FalkorDB(host='localhost', port=6379)
+    g = r.select_graph(graph_name)
+    node_results, edge_results = [], []
+    try:
+        res = g.query(
+            "MATCH (n) WHERE NOT 'Episodic' IN labels(n) "
+            "RETURN n.uuid, n.name, labels(n), n.summary"
+        )
+        node_results = res.result_set
+    except Exception as exc:
+        print(f'[graph_data] node query failed for {graph_name!r}: {exc}')
+    try:
+        res = g.query(
+            "MATCH (a)-[r:RELATES_TO]->(b) "
+            "RETURN a.uuid, a.name, r.name, r.fact, b.uuid, b.name"
+        )
+        edge_results = res.result_set
+    except Exception as exc:
+        print(f'[graph_data] edge query failed for {graph_name!r}: {exc}')
+    return node_results, edge_results
+
+
 async def graph_data_handler(request):
     """Query all Graphiti FalkorDB graphs and return nodes + edges for vis.js."""
     loop = asyncio.get_event_loop()
@@ -1185,32 +1339,33 @@ async def graph_data_handler(request):
     edges_list = []  # {from, to, label, title}
     edge_set = set()
 
-    for graph in GRAPHITI_GRAPHS:
-        # --- Nodes (Entity only, skip Episodic) ---
-        node_raw = await loop.run_in_executor(
-            None,
-            _run_falkordb_query,
-            graph,
-            "MATCH (n) WHERE NOT 'Episodic' IN labels(n) RETURN n.uuid, n.name, labels(n)"
-        )
-        node_rows = _parse_falkordb_table(node_raw, 3)
-        for row in node_rows:
-            uuid_val, name_val, labels_val = row
+    all_results = await asyncio.gather(
+        *[loop.run_in_executor(None, _query_graph, graph) for graph in GRAPHITI_GRAPHS]
+    )
+    for graph, (node_results, edge_results) in zip(GRAPHITI_GRAPHS, all_results):
+
+        for row in node_results:
+            if len(row) < 4:
+                continue
+            uuid_val, name_val, labels_val, summary_val = row
             if not uuid_val:
                 continue
-            # labels_val looks like "[Entity, Organization]"
-            clean = labels_val.strip('[]')
-            parts = [p.strip() for p in clean.split(',')]
+            # labels_val is a list like ['Entity', 'Organization']
+            if isinstance(labels_val, list):
+                parts = labels_val
+            else:
+                parts = [p.strip() for p in str(labels_val).strip('[]').split(',')]
             new_groups = [p for p in parts if p not in ('Entity', '')]
+            summary_str = str(summary_val) if summary_val else ''
             if uuid_val not in nodes_map:
                 nodes_map[uuid_val] = {
                     'id': uuid_val,
                     'label': name_val,
+                    'summary': summary_str,
                     'groups': new_groups,
                     '_graphs': [graph],
                 }
             else:
-                # Same UUID seen in another graph — union the type labels.
                 existing = nodes_map[uuid_val]
                 for g in new_groups:
                     if g not in existing['groups']:
@@ -1218,15 +1373,9 @@ async def graph_data_handler(request):
                 if graph not in existing['_graphs']:
                     existing['_graphs'].append(graph)
 
-        # --- Edges (RELATES_TO relationships) ---
-        edge_raw = await loop.run_in_executor(
-            None,
-            _run_falkordb_query,
-            graph,
-            "MATCH (a)-[r:RELATES_TO]->(b) RETURN a.uuid, a.name, r.name, r.fact, b.uuid, b.name"
-        )
-        edge_rows = _parse_falkordb_table(edge_raw, 6)
-        for row in edge_rows:
+        for row in edge_results:
+            if len(row) < 6:
+                continue
             src_uuid, _src_name, rel_name, fact, dst_uuid, _dst_name = row
             if not src_uuid or not dst_uuid:
                 continue
@@ -1241,66 +1390,45 @@ async def graph_data_handler(request):
                 'title': fact or rel_name,
             })
 
-    # Second deduplication pass: merge nodes with the same name (case-insensitive).
-    # Different graph groups assign different UUIDs to the same real-world entity,
-    # so we keep the first UUID seen as canonical and remap edges to it.
-    name_to_canonical = {}   # normalised name -> canonical uuid
-    uuid_remap = {}          # duplicate uuid -> canonical uuid
+    name_to_canonical = {}
+    uuid_remap = {}
     for uuid_val, node in list(nodes_map.items()):
-        key = (node.get('label') or '').strip().lower()
+        key = _user_dedup_key(node.get('label') or '')
         if not key:
             continue
         if key not in name_to_canonical:
             name_to_canonical[key] = uuid_val
         else:
             canonical_uuid = name_to_canonical[key]
-            canonical_node = nodes_map[canonical_uuid]
-            # Union the groups and source-graph lists from the duplicate.
-            for g in node.get('groups', []):
-                if g not in canonical_node['groups']:
-                    canonical_node['groups'].append(g)
-            for gr in node.get('_graphs', []):
-                if gr not in canonical_node['_graphs']:
-                    canonical_node['_graphs'].append(gr)
             uuid_remap[uuid_val] = canonical_uuid
             del nodes_map[uuid_val]
 
-    # Finalise vis.js fields: pick best group label and build title tooltip.
+    # Finalise vis.js fields: classify entity type and build title tooltip.
     for node in nodes_map.values():
-        groups = node.pop('groups', [])
+        node.pop('groups', None)
         graphs = node.pop('_graphs', [])
-        # Pick most specific type for vis.js colouring.
-        specific = [g for g in groups if g not in ('Organization', 'Entity')]
-        if specific:
-            vis_group = specific[0]
-        elif groups:
-            vis_group = groups[0]
-        else:
-            vis_group = 'Entity'
+        summary = node.pop('summary', '')
+        vis_group = _classify_entity(node.get('label', ''), summary)
         node['group'] = vis_group
-        node['groups'] = groups  # keep for tooltip / client use
         graphs_str = ', '.join(graphs)
-        groups_str = ', '.join(groups) if groups else 'Entity'
-        node['title'] = f"{node['label']} [{groups_str}] ({graphs_str})"
+        node['title'] = f"{node['label']} [{vis_group}] ({graphs_str})"
 
-    # Remap edge endpoints and drop any self-loops that result from the merge.
-    remapped_edges = []
-    remapped_edge_set = set()
+    # Remap edge endpoints and deduplicate.
+    seen_edges = set()
+    deduped_edges = []
     for edge in edges_list:
         src = uuid_remap.get(edge['from'], edge['from'])
         dst = uuid_remap.get(edge['to'], edge['to'])
         if src == dst:
             continue
         key = (src, dst, edge.get('label'))
-        if key in remapped_edge_set:
-            continue
-        remapped_edge_set.add(key)
-        remapped_edges.append({**edge, 'from': src, 'to': dst})
+        if key not in seen_edges:
+            seen_edges.add(key)
+            deduped_edges.append({**edge, 'from': src, 'to': dst})
 
     payload = {
         'nodes': list(nodes_map.values()),
-        'edges': remapped_edges,
-        '_dedup_removed': len(uuid_remap),
+        'edges': deduped_edges,
     }
     return web.Response(
         text=json.dumps(payload),
@@ -1533,12 +1661,17 @@ async def topology_page_handler(request):
     return web.Response(text=content, content_type='text/html')
 
 
+async def gamecube_sounds_handler(request):
+    path = os.path.join(os.path.dirname(__file__), 'gamecube-sounds.js')
+    with open(path) as f:
+        return web.Response(text=f.read(), content_type='application/javascript')
+
+
 async def ingestion_status_handler(request):
     """Return discord_history ingestion progress stats from FalkorDB."""
     TOTAL_EPISODES = 141
     try:
-        import falkordb
-        r = falkordb.FalkorDB(host='localhost', port=6379)
+        r = _fdb.FalkorDB(host='localhost', port=6379)
         g = r.select_graph('discord_history')
         episodes = g.query("MATCH (e:Episodic) RETURN count(e) as cnt").result_set[0][0]
         nodes    = g.query("MATCH (n:Entity) RETURN count(n) as cnt").result_set[0][0]
@@ -1587,6 +1720,7 @@ app.router.add_post('/restart-bot', restart_bot_handler)
 app.router.add_get('/cost-data', cost_data_handler)
 app.router.add_get('/system-status', system_status_handler)
 app.router.add_get('/topology', topology_page_handler)
+app.router.add_get('/gamecube-sounds.js', gamecube_sounds_handler)
 
 if __name__ == '__main__':
     web.run_app(app, host='127.0.0.1', port=7682)

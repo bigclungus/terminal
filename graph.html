@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
   <title>Knowledge Graph — BigClungus</title>
+  <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -103,6 +104,70 @@
       opacity: 1;
       color: #56d364;
     }
+
+    /* Node search overlay */
+    #node-search-overlay {
+      display: block;
+      position: fixed;
+      top: 52px;
+      right: 12px;
+      z-index: 100;
+      width: 260px;
+      background: rgba(13, 17, 23, 0.96);
+      border: 1px solid #6b5ce7;
+      border-radius: 6px;
+      padding: 8px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 4px 24px rgba(107, 92, 231, 0.25);
+      font-family: monospace;
+    }
+    #node-search-input {
+      width: 100%;
+      background: #1a1a2e;
+      border: 1px solid #6b5ce7;
+      border-radius: 4px;
+      color: #e6edf3;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 5px 8px;
+      outline: none;
+      box-sizing: border-box;
+    }
+    #node-search-input::placeholder { color: #555; }
+    #node-search-input:focus { border-color: #8b7cf8; }
+    #node-search-results {
+      margin-top: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .node-search-result {
+      padding: 4px 8px;
+      color: #aaa;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.1s, color 0.1s;
+    }
+    .node-search-result:hover,
+    .node-search-result.active {
+      background: #1a1a2e;
+      color: #e6edf3;
+    }
+    .node-search-result .ns-group {
+      font-size: 9px;
+      color: #6b5ce7;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    #node-search-hint {
+      margin-top: 5px;
+      font-size: 9px;
+      color: #444;
+      text-align: right;
+    }
     #ingestion-status {
       font-size: 10px;
       font-family: monospace;
@@ -111,6 +176,34 @@
       padding-left: 8px;
       border-left: 1px solid #2a2a4e;
       margin-left: 2px;
+    }
+    #legend {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      background: rgba(13,17,23,0.85);
+      border: 1px solid #2a2a4e;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: monospace;
+      font-size: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      backdrop-filter: blur(4px);
+      z-index: 10;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #aaa;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
     }
   </style>
 </head>
@@ -123,22 +216,38 @@
     <span id="ingestion-status">&#x1F4CA; loading...</span>
   </div>
   <div id="counts">loading...</div>
+
+  <!-- Node search overlay -->
+  <div id="node-search-overlay">
+    <input id="node-search-input" type="text" placeholder="Search nodes… (Enter to go, Esc to close)" autocomplete="off" spellcheck="false">
+    <div id="node-search-results"></div>
+    <div id="node-search-hint"></div>
+  </div>
+  <div id="legend"></div>
   <div id="back-link"><a href="/">&#x2190; terminal</a></div>
   <div id="loading">Loading graph...</div>
 
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <script>
     const GROUP_COLORS = {
-      Organization: { background: '#58a6ff', border: '#1f6feb', highlight: { background: '#79b8ff', border: '#58a6ff' } },
-      Object:       { background: '#3fb950', border: '#238636', highlight: { background: '#56d364', border: '#3fb950' } },
-      Topic:        { background: '#d29922', border: '#9e6a03', highlight: { background: '#e3b341', border: '#d29922' } },
-      Location:     { background: '#bc8cff', border: '#8957e5', highlight: { background: '#d2a8ff', border: '#bc8cff' } },
-      Document:     { background: '#f85149', border: '#cf222e', highlight: { background: '#ffa198', border: '#f85149' } },
-      Preference:   { background: '#79c0ff', border: '#388bfd', highlight: { background: '#a5d6ff', border: '#79c0ff' } },
-      Entity:       { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } },
+      Person:    { background: '#f0883e', border: '#bd561d', highlight: { background: '#ffab70', border: '#f0883e' } },
+      Place:     { background: '#bc8cff', border: '#8957e5', highlight: { background: '#d2a8ff', border: '#bc8cff' } },
+      Company:   { background: '#58a6ff', border: '#1f6feb', highlight: { background: '#79b8ff', border: '#58a6ff' } },
+      Tech:      { background: '#3fb950', border: '#238636', highlight: { background: '#56d364', border: '#3fb950' } },
+      Politics:  { background: '#f85149', border: '#cf222e', highlight: { background: '#ffa198', border: '#f85149' } },
+      Concept:   { background: '#d29922', border: '#9e6a03', highlight: { background: '#e3b341', border: '#d29922' } },
+      Entity:    { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } },
     };
 
     const DEFAULT_COLOR = { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } };
+
+    // Build legend from GROUP_COLORS (excluding the fallback Entity entry)
+    (function () {
+      const el = document.getElementById('legend');
+      Object.entries(GROUP_COLORS).filter(([g]) => g !== 'Entity').forEach(function ([group, col]) {
+        el.innerHTML += '<div class="legend-item"><div class="legend-dot" style="background:' + col.background + '"></div> ' + group + '</div>';
+      });
+    })();
 
     let graphNetwork = null;
     let nodesDS = null;
@@ -155,6 +264,7 @@
         id: n.id,
         label: n.label,
         title: n.title,
+        group: n.group,
         color: GROUP_COLORS[n.group] || DEFAULT_COLOR,
         font: { color: '#e6edf3', size: 11, face: 'monospace' },
         borderWidth: 1,
@@ -338,6 +448,123 @@
     setInterval(refreshIngestionStatus, 10000);
 
     loadGraph().then(startAutoRefresh);
+
+    // GameCube OS sounds — attach to toolbar buttons
+    document.querySelectorAll('.graph-btn').forEach(function (btn) {
+      btn.addEventListener('mouseenter', function () { if (window.GCSounds) GCSounds.hover(); });
+      btn.addEventListener('click', function () { if (window.GCSounds) GCSounds.click(); }, true);
+    });
+
+    // ── Node Search (Ctrl+F / Cmd+F) ─────────────────────────────────────────
+
+    (function () {
+      const overlay  = document.getElementById('node-search-overlay');
+      const input    = document.getElementById('node-search-input');
+      const results  = document.getElementById('node-search-results');
+      let activeIdx  = -1;
+      let matchCache = [];
+
+      function clearSearch() {
+        input.value = '';
+        results.innerHTML = '';
+        matchCache = [];
+        activeIdx = -1;
+      }
+
+      function buildResults(query) {
+        results.innerHTML = '';
+        activeIdx = -1;
+        if (!query || !nodesDS) { matchCache = []; return; }
+
+        const q = query.toLowerCase();
+        const all = nodesDS.get();
+        matchCache = all
+          .filter(n => n.label && n.label.toLowerCase().includes(q))
+          .slice(0, 8);
+
+        matchCache.forEach(function (node, i) {
+          const div = document.createElement('div');
+          div.className = 'node-search-result';
+          div.dataset.idx = i;
+          const groupLabel = node.group || '';
+          const dotColor = (GROUP_COLORS[groupLabel] || DEFAULT_COLOR).background;
+          div.innerHTML =
+            escapeHtml(node.label) +
+            (groupLabel ? '<span class="ns-group" style="color:' + dotColor + '">&#9679; ' + escapeHtml(groupLabel) + '</span>' : '');
+          div.addEventListener('mouseenter', function () { setActive(i); });
+          div.addEventListener('click', function () { selectResult(i); });
+          results.appendChild(div);
+        });
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      function setActive(idx) {
+        const items = results.querySelectorAll('.node-search-result');
+        items.forEach(function (el, i) {
+          el.classList.toggle('active', i === idx);
+        });
+        activeIdx = idx;
+      }
+
+      let flashTimer = null;
+      function selectResult(idx) {
+        if (!matchCache[idx]) return;
+        const node = matchCache[idx];
+        clearSearch();
+        if (!graphNetwork) return;
+
+        graphNetwork.selectNodes([node.id]);
+        graphNetwork.focus(node.id, {
+          scale: 1.5,
+          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+        });
+
+        // Brief flash: override border color then restore
+        const orig = nodesDS.get(node.id);
+        nodesDS.update({ id: node.id, borderWidth: 4, color: Object.assign({}, orig.color, { border: '#6b5ce7' }) });
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(function () {
+          nodesDS.update({ id: node.id, borderWidth: orig.borderWidth || 1, color: orig.color });
+        }, 800);
+      }
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+          e.preventDefault();
+          input.focus();
+          input.select();
+          return;
+        }
+
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          clearSearch();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setActive(Math.min(activeIdx + 1, matchCache.length - 1));
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setActive(Math.max(activeIdx - 1, 0));
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const idx = activeIdx >= 0 ? activeIdx : 0;
+          selectResult(idx);
+        }
+      });
+
+      // Live search as user types
+      input.addEventListener('input', function () {
+        buildResults(input.value.trim());
+        if (matchCache.length > 0) setActive(0);
+      });
+    })();
   </script>
 </body>
 </html>

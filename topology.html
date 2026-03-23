@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
   <title>System Topology — BigClungus</title>
+  <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -370,6 +371,12 @@
     }
 
     loadTopology().then(startAutoRefresh);
+
+    // GameCube OS sounds — attach to toolbar buttons
+    document.querySelectorAll('.graph-btn').forEach(function (btn) {
+      btn.addEventListener('mouseenter', function () { GCSounds.hover(); });
+      btn.addEventListener('click', function () { GCSounds.click(); }, true);
+    });
   </script>
 </body>
 </html>
