@@ -679,6 +679,8 @@ def get_task_description(agent_id, fpath):
         with open(fpath, 'r', errors='replace') as f:
             first_line = f.readline()
         obj = json.loads(first_line)
+        if not isinstance(obj, dict):
+            return ''
         content = obj.get('message', {}).get('content', '')
         if not isinstance(content, str):
             return ''
