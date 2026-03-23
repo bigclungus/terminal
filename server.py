@@ -456,6 +456,21 @@ HTML = r"""<!DOCTYPE html>
       white-space: nowrap;
     }
     #home-link:hover { color: #58a6ff; border-color: #58a6ff; }
+    #edit-claude-link {
+      color: #8b949e;
+      font-size: 10px;
+      font-weight: normal;
+      text-decoration: none;
+      letter-spacing: 0;
+      text-transform: none;
+      padding: 2px 6px;
+      border: 1px solid #2a2a4e;
+      border-radius: 3px;
+      background: #0d1117;
+      transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    #edit-claude-link:hover { color: #58a6ff; border-color: #58a6ff; }
     #restart-btn {
       color: #8b949e;
       font-size: 10px;
@@ -481,6 +496,7 @@ HTML = r"""<!DOCTYPE html>
     <a id="home-link" href="https://hello.clung.us/" target="_blank">&#x2190; clung.us</a>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
     <a id="topology-link" href="/topology" target="_blank">&#x1F5FA; system</a>
+    <a id="edit-claude-link" href="/edit-claude-md" target="_blank">&#x270F; claude.md</a>
     <button id="restart-btn">&#x2620; restart</button>
   </div>
   <div id="healthbar">
@@ -1778,6 +1794,89 @@ async def ingestion_status_handler(request):
     )
 
 
+CLAUDE_MD_PATH = '/home/clungus/.claude/CLAUDE.md'
+
+_EDIT_CLAUDE_MD_STYLE = """
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#0d0d0d; color:#d4d4d4; font-family:monospace; padding:24px; }
+    h1 { color:#e94560; font-size:15px; margin-bottom:16px; letter-spacing:.05em; }
+    .back { color:#8b949e; font-size:11px; text-decoration:none; border:1px solid #2a2a4e;
+            border-radius:3px; padding:2px 8px; background:#0d1117; margin-left:12px; }
+    .back:hover { color:#58a6ff; border-color:#58a6ff; }
+    .header { display:flex; align-items:center; margin-bottom:16px; }
+    textarea {
+      width:100%; height:calc(100vh - 130px); background:#111122; color:#d4d4d4;
+      border:1px solid #2a2a4e; border-radius:4px; padding:12px; font-family:monospace;
+      font-size:13px; resize:vertical; outline:none; line-height:1.5;
+    }
+    textarea:focus { border-color:#e94560; }
+    .actions { margin-top:10px; display:flex; align-items:center; gap:12px; }
+    button { background:#238636; color:#fff; border:1px solid #2ea043; border-radius:3px;
+             padding:6px 18px; font-family:monospace; font-size:13px; cursor:pointer; }
+    button:hover { background:#2ea043; }
+    .msg { font-size:12px; color:#4caf50; }
+    .msg.err { color:#e94560; }
+"""
+
+async def edit_claude_md_get(request):
+    saved = request.rel_url.query.get('saved', '')
+    error = request.rel_url.query.get('error', '')
+    try:
+        with open(CLAUDE_MD_PATH, 'r') as f:
+            content = f.read()
+    except OSError as e:
+        content = ''
+        error = str(e)
+
+    # Escape for HTML textarea
+    escaped = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    status_html = ''
+    if saved:
+        status_html = '<span class="msg">&#x2713; Saved successfully.</span>'
+    elif error:
+        status_html = f'<span class="msg err">Error: {error}</span>'
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Edit CLAUDE.md \u2014 BigClungus</title>
+  <style>{_EDIT_CLAUDE_MD_STYLE}</style>
+</head>
+<body>
+  <div class="header">
+    <h1>&#x270F; Edit ~/.claude/CLAUDE.md</h1>
+    <a class="back" href="/">&#x2190; terminal</a>
+  </div>
+  <form method="POST" action="/edit-claude-md">
+    <textarea name="content" spellcheck="false">{escaped}</textarea>
+    <div class="actions">
+      <button type="submit">&#x1F4BE; Save</button>
+      {status_html}
+    </div>
+  </form>
+</body>
+</html>"""
+    return web.Response(text=html, content_type='text/html')
+
+
+async def edit_claude_md_post(request):
+    try:
+        data = await request.post()
+        content = data.get('content', '')
+    except Exception as e:
+        raise web.HTTPFound(f'/edit-claude-md?error={e}')
+
+    try:
+        with open(CLAUDE_MD_PATH, 'w') as f:
+            f.write(content)
+    except OSError as e:
+        raise web.HTTPFound(f'/edit-claude-md?error={e}')
+
+    raise web.HTTPFound('/edit-claude-md?saved=1')
+
+
 app = web.Application(middlewares=[auth_middleware])
 app.router.add_get('/login', login_handler)
 app.router.add_post('/login', login_handler)
@@ -1797,6 +1896,8 @@ app.router.add_get('/cost-data', cost_data_handler)
 app.router.add_get('/system-status', system_status_handler)
 app.router.add_get('/topology', topology_page_handler)
 app.router.add_get('/gamecube-sounds.js', gamecube_sounds_handler)
+app.router.add_get('/edit-claude-md', edit_claude_md_get)
+app.router.add_post('/edit-claude-md', edit_claude_md_post)
 
 _JSONL_DIR = '/home/clungus/.claude/projects/-mnt-data'
 
