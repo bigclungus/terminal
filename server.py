@@ -144,6 +144,7 @@ async def github_callback_handler(request):
         max_age=COOKIE_MAX_AGE,
         httponly=True,
         samesite='Lax',
+        domain='.clung.us',
     )
     # Clear the OAuth state cookie
     resp.del_cookie('gh_oauth_state')
