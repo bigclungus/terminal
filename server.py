@@ -1878,38 +1878,38 @@ async def cost_data_handler(request):
 _github_tasks_cache: dict = {'data': None, 'ts': 0.0}
 
 
+BIGCLUNGUS_TASKS_DIR = '/home/clungus/work/bigclungus-meta/tasks'
+
+
 def _fetch_github_tasks() -> list:
-    """Run gh project item-list and return parsed items."""
+    """Read task files from bigclungus-meta/tasks/ and return parsed items."""
     try:
-        result = subprocess.run(
-            ['gh', 'project', 'item-list', '1', '--owner', 'BigClungus',
-             '--format', 'json', '--limit', '50'],
-            capture_output=True, text=True, timeout=15,
-            env={**os.environ, 'HOME': '/home/clungus'},
-        )
-        if result.returncode != 0:
-            return []
-        data = json.loads(result.stdout)
-        items = data.get('items', [])
+        import glob as _glob
         parsed = []
-        for item in items:
-            content = item.get('content') or {}
-            url = content.get('url', '')
-            number = content.get('number')
-            created_at = content.get('createdAt', '')
-            updated_at = content.get('updatedAt', '')
-            labels = [l.get('name', '') if isinstance(l, dict) else str(l)
-                      for l in (item.get('labels') or [])]
+        for fpath in _glob.glob(os.path.join(BIGCLUNGUS_TASKS_DIR, '*.json')):
+            try:
+                with open(fpath) as f:
+                    task = json.load(f)
+            except Exception:
+                continue
+            task_id = task.get('id', os.path.basename(fpath))
+            started = task.get('started_at', '')
+            finished = task.get('finished_at', '')
+            status = task.get('status', 'unknown')
+            status_label = {'in_progress': 'In Progress', 'done': 'Done',
+                            'stale': 'Stale', 'failed': 'Failed'}.get(status, status)
             parsed.append({
-                'id': item.get('id', ''),
-                'title': item.get('title', ''),
-                'status': item.get('status', 'No Status'),
-                'url': url,
-                'number': number,
-                'createdAt': created_at,
-                'updatedAt': updated_at,
-                'labels': labels,
+                'id': task_id,
+                'title': task.get('title', task_id),
+                'status': status_label,
+                'url': f'https://hello.clung.us/tasks',
+                'number': None,
+                'createdAt': started,
+                'updatedAt': finished or started,
+                'labels': [task.get('agent_type', '')] if task.get('agent_type') else [],
+                'discord_user': task.get('discord_user'),
             })
+        parsed.sort(key=lambda x: x.get('createdAt', ''), reverse=True)
         return parsed
     except Exception as exc:
         print(f'[github-tasks] error: {exc}')
