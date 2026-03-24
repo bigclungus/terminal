@@ -402,6 +402,33 @@ HTML = r"""<!DOCTYPE html>
       flex-shrink: 0;
       margin-top: 2px;
     }
+    .gh-user-badge {
+      font-size: 9px;
+      color: #f0c040;
+      border: 1px solid #3a3000;
+      background: #2a2000;
+      border-radius: 3px;
+      padding: 1px 5px;
+      flex-shrink: 0;
+      font-weight: bold;
+      white-space: nowrap;
+    }
+    .gh-summary {
+      color: #555;
+      font-size: 9px;
+      margin-top: 3px;
+      line-height: 1.4;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gh-item-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 3px;
+    }
     .gh-empty {
       color: #444;
       font-size: 11px;
@@ -666,14 +693,14 @@ HTML = r"""<!DOCTYPE html>
     <div id="agents">
       <div id="gh-tasks-panel">
         <div id="gh-tasks-header">
-          &#x2B50; Tasks
+          <span id="gh-tasks-header-text">&#x1F3AF; Goals</span>
           <span id="gh-tasks-refresh" title="Refresh">&#x21BB;</span>
         </div>
         <div id="gh-tasks-list">
           <div class="gh-empty">Loading...</div>
         </div>
       </div>
-      <div id="agents-header">&#x25A3; Subagent Tasks</div>
+      <div id="agents-header">&#x26A1; Activity</div>
       <div id="agents-list">
         <div id="agents-empty">No recent tasks</div>
       </div>
@@ -748,51 +775,81 @@ HTML = r"""<!DOCTYPE html>
 
     function renderGhTasks(items) {
       const list = document.getElementById('gh-tasks-list');
-      if (!items || items.length === 0) {
-        list.innerHTML = '<div class="gh-empty">No project items found</div>';
+      const headerText = document.getElementById('gh-tasks-header-text');
+
+      // Filter to only human-initiated goals (discord_user set)
+      const goals = (items || []).filter(item => item.discord_user);
+
+      // Update header count
+      if (headerText) {
+        headerText.textContent = goals.length > 0
+          ? `\uD83C\uDFAF Goals (${goals.length})`
+          : `\uD83C\uDFAF Goals`;
+      }
+
+      if (!goals.length) {
+        list.innerHTML = '<div class="gh-empty">No human-initiated goals</div>';
         return;
       }
 
-      const groups = { 'In Progress': [], 'Todo': [], 'Done': [], '_other': [] };
-      for (const item of items) {
+      const groups = { 'In Progress': [], 'Todo': [], 'Done': [], 'Stale': [], 'Failed': [], '_other': [] };
+      for (const item of goals) {
         const s = item.status || 'No Status';
         if (s === 'In Progress') groups['In Progress'].push(item);
         else if (s === 'Todo') groups['Todo'].push(item);
         else if (s === 'Done') groups['Done'].push(item);
+        else if (s === 'Stale') groups['Stale'].push(item);
+        else if (s === 'Failed') groups['Failed'].push(item);
         else groups['_other'].push(item);
       }
 
       let html = '';
 
-      function renderGroup(label, groupItems, badgeCls) {
+      function renderGoalGroup(label, groupItems, badgeCls) {
         if (!groupItems.length) return '';
         let out = `<div class="gh-group-label">${escHtml(label)} (${groupItems.length})</div>`;
         for (const item of groupItems) {
           const age = ghRelativeTime(item.updatedAt || item.createdAt);
+          const rawTitle = item.title || '';
+          const shortTitle = rawTitle.length > 60 ? rawTitle.slice(0, 60) + '\u2026' : rawTitle;
           const titleHtml = item.url
-            ? `<a href="${escHtml(item.url)}" target="_blank">${escHtml(item.title)}</a>`
-            : escHtml(item.title);
-          out += `<div class="gh-item">
-            <span class="gh-badge ${badgeCls}">${escHtml(item.status || '?')}</span>
-            <span class="gh-title">${titleHtml}</span>
-            <span class="gh-age">${escHtml(age)}</span>
+            ? `<a href="${escHtml(item.url)}" target="_blank">${escHtml(shortTitle)}</a>`
+            : escHtml(shortTitle);
+          const userBadge = item.discord_user
+            ? `<span class="gh-user-badge">@${escHtml(item.discord_user)}</span>`
+            : '';
+          const rawSummary = (item.summary || '').replace(/\s+/g, ' ').trim();
+          const shortSummary = rawSummary.length > 80 ? rawSummary.slice(0, 80) + '\u2026' : rawSummary;
+          const summaryHtml = shortSummary
+            ? `<div class="gh-summary">${escHtml(shortSummary)}</div>`
+            : '';
+          out += `<div class="gh-item" style="flex-direction:column; align-items:stretch;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="gh-badge ${badgeCls}">${escHtml(item.status || '?')}</span>
+              <span class="gh-title" style="flex:1;">${titleHtml}</span>
+              <span class="gh-age">${escHtml(age)}</span>
+            </div>
+            <div class="gh-item-meta">${userBadge}</div>
+            ${summaryHtml}
           </div>`;
         }
         return out;
       }
 
-      html += renderGroup('In Progress', groups['In Progress'], 'inprogress');
-      html += renderGroup('Todo', groups['Todo'], 'todo');
-      if (groups['_other'].length) html += renderGroup('Other', groups['_other'], 'other');
+      html += renderGoalGroup('In Progress', groups['In Progress'], 'inprogress');
+      html += renderGoalGroup('Todo', groups['Todo'], 'todo');
+      html += renderGoalGroup('Stale', groups['Stale'], 'other');
+      html += renderGoalGroup('Failed', groups['Failed'], 'other');
+      if (groups['_other'].length) html += renderGoalGroup('Other', groups['_other'], 'other');
 
       // Done: collapsed by default, show last 5
       if (groups['Done'].length) {
         const shown = ghDoneExpanded ? groups['Done'] : groups['Done'].slice(0, 5);
-        html += renderGroup('Done', shown, 'done');
+        html += renderGoalGroup('Done', shown, 'done');
         if (groups['Done'].length > 5) {
           const label = ghDoneExpanded
-            ? '▲ collapse done'
-            : `▼ show all ${groups['Done'].length} done`;
+            ? '\u25B2 collapse done'
+            : `\u25BC show all ${groups['Done'].length} done`;
           html += `<div class="gh-done-toggle" id="gh-done-toggle">${label}</div>`;
         }
       }
@@ -1946,6 +2003,16 @@ def _fetch_github_tasks() -> list:
             started = _get_started_ts(task)
             finished = _get_finished_ts(task)
             status_label = _STATUS_LABELS.get(status, status)
+            # Extract summary: prefer top-level summary, else last log context
+            summary = task.get('summary') or ''
+            if not summary:
+                log = task.get('log')
+                if log and isinstance(log, list):
+                    for entry in reversed(log):
+                        ctx = entry.get('context', '')
+                        if ctx and entry.get('event') != 'started':
+                            summary = ctx
+                            break
             parsed.append({
                 'id': task_id,
                 'title': task.get('title', task_id),
@@ -1959,6 +2026,7 @@ def _fetch_github_tasks() -> list:
                 'run_in_background': task.get('run_in_background'),
                 'isolation': task.get('isolation'),
                 'model': task.get('model'),
+                'summary': summary,
             })
         parsed.sort(key=lambda x: x.get('createdAt', ''), reverse=True)
         return parsed
