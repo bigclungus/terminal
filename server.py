@@ -155,13 +155,25 @@ async def github_callback_handler(request):
 
     next_url = request.cookies.get('gh_oauth_next', '')
     redirect_to = next_url if _is_safe_redirect(next_url) else '/'
-    resp = web.HTTPFound(redirect_to)
+    # Serve an HTML page that sets the cookie on a full page load, then redirects
+    # via JS. This breaks the ITP redirect chain on iOS Safari, which throttles
+    # cookies set during cross-site 302 redirect chains.
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8">
+<style>body{{background:#0a0a0f;color:#4ecca3;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}}</style>
+</head>
+<body><div>authenticated — redirecting...</div>
+<script>window.location.replace({json.dumps(redirect_to)});</script>
+</body>
+</html>"""
+    resp = web.Response(text=html, content_type='text/html')
     resp.set_cookie(
         GITHUB_COOKIE, username,
         max_age=COOKIE_MAX_AGE,
         httponly=True,
-        secure=True,
         samesite='Lax',
+        secure=True,
         domain='.clung.us',
     )
     # Clear the OAuth state and next cookies
