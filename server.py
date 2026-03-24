@@ -86,12 +86,15 @@ async def login_handler(request):
 async def github_auth_handler(request):
     """Redirect user to GitHub OAuth authorization page."""
     state = secrets.token_urlsafe(16)
+    next_url = request.rel_url.query.get('next', '')
     url = (
         f'https://github.com/login/oauth/authorize'
         f'?client_id={GITHUB_CLIENT_ID}&scope=read:user&state={state}'
     )
     resp = web.HTTPFound(url)
     resp.set_cookie('gh_oauth_state', state, max_age=600, httponly=True, samesite='Lax')
+    if next_url:
+        resp.set_cookie('gh_oauth_next', next_url, max_age=600, httponly=True, samesite='Lax', domain='.clung.us')
     return resp
 
 
@@ -138,7 +141,9 @@ async def github_callback_handler(request):
     if GITHUB_ALLOWED_USERS and username.lower() not in GITHUB_ALLOWED_USERS:
         raise web.HTTPForbidden(reason=f'GitHub user {username!r} is not allowed')
 
-    resp = web.HTTPFound('/')
+    next_url = request.cookies.get('gh_oauth_next', '')
+    redirect_to = next_url if next_url and next_url.startswith('https://') and '.clung.us' in next_url else '/'
+    resp = web.HTTPFound(redirect_to)
     resp.set_cookie(
         GITHUB_COOKIE, username,
         max_age=COOKIE_MAX_AGE,
@@ -146,8 +151,9 @@ async def github_callback_handler(request):
         samesite='Lax',
         domain='.clung.us',
     )
-    # Clear the OAuth state cookie
+    # Clear the OAuth state and next cookies
     resp.del_cookie('gh_oauth_state')
+    resp.del_cookie('gh_oauth_next', domain='.clung.us')
     return resp
 
 
