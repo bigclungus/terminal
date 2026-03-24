@@ -666,7 +666,7 @@ HTML = r"""<!DOCTYPE html>
     <div id="agents">
       <div id="gh-tasks-panel">
         <div id="gh-tasks-header">
-          &#x2B50; GitHub Project
+          &#x2B50; Tasks
           <span id="gh-tasks-refresh" title="Refresh">&#x21BB;</span>
         </div>
         <div id="gh-tasks-list">
@@ -726,7 +726,7 @@ HTML = r"""<!DOCTYPE html>
     }
     connect();
 
-    // GitHub Project tasks panel
+    // Tasks panel
     function ghRelativeTime(isoStr) {
       if (!isoStr) return '';
       const secs = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
@@ -1886,6 +1886,49 @@ _github_tasks_cache: dict = {'data': None, 'ts': 0.0}
 
 BIGCLUNGUS_TASKS_DIR = '/home/clungus/work/bigclungus-meta/tasks'
 
+_EVENT_TO_STATUS = {
+    'started': 'in_progress',
+    'done': 'done',
+    'stale': 'stale',
+    'failed': 'failed',
+}
+
+_STATUS_LABELS = {
+    'in_progress': 'In Progress',
+    'done': 'Done',
+    'stale': 'Stale',
+    'failed': 'Failed',
+}
+
+
+def _derive_status(task: dict) -> str:
+    """Derive status string from the last log[] entry's event, or fall back to top-level status."""
+    log = task.get('log')
+    if log and isinstance(log, list) and len(log) > 0:
+        last_event = log[-1].get('event', '')
+        return _EVENT_TO_STATUS.get(last_event, last_event)
+    return task.get('status', 'unknown')
+
+
+def _get_started_ts(task: dict) -> str:
+    """Return started_at timestamp from first 'started' log entry, or top-level started_at."""
+    log = task.get('log')
+    if log and isinstance(log, list):
+        for entry in log:
+            if entry.get('event') == 'started':
+                return entry.get('ts', '')
+    return task.get('started_at', '')
+
+
+def _get_finished_ts(task: dict) -> str:
+    """Return finished_at timestamp from last non-started log entry, or top-level finished_at."""
+    log = task.get('log')
+    if log and isinstance(log, list):
+        for entry in reversed(log):
+            if entry.get('event') != 'started':
+                return entry.get('ts', '')
+    return task.get('finished_at', '')
+
 
 def _fetch_github_tasks() -> list:
     """Read task files from bigclungus-meta/tasks/ and return parsed items."""
@@ -1899,11 +1942,10 @@ def _fetch_github_tasks() -> list:
             except Exception:
                 continue
             task_id = task.get('id', os.path.basename(fpath))
-            started = task.get('started_at', '')
-            finished = task.get('finished_at', '')
-            status = task.get('status', 'unknown')
-            status_label = {'in_progress': 'In Progress', 'done': 'Done',
-                            'stale': 'Stale', 'failed': 'Failed'}.get(status, status)
+            status = _derive_status(task)
+            started = _get_started_ts(task)
+            finished = _get_finished_ts(task)
+            status_label = _STATUS_LABELS.get(status, status)
             parsed.append({
                 'id': task_id,
                 'title': task.get('title', task_id),
