@@ -218,7 +218,8 @@ async def auth_middleware(request, handler):
     if path in ('/login', '/auth/github', '/auth/callback'):
         return await handler(request)
     if not _is_authed(request):
-        raise web.HTTPFound('/login')
+        next_url = 'https://terminal.clung.us' + path
+        raise web.HTTPFound(f'https://clung.us/auth/github?next={urllib.parse.quote(next_url)}')
     return await handler(request)
 # ─────────────────────────────────────────────────────────────────────────────
 
