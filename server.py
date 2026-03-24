@@ -1956,6 +1956,9 @@ def _fetch_github_tasks() -> list:
                 'updatedAt': finished or started,
                 'labels': [task.get('agent_type', '')] if task.get('agent_type') else [],
                 'discord_user': task.get('discord_user'),
+                'run_in_background': task.get('run_in_background'),
+                'isolation': task.get('isolation'),
+                'model': task.get('model'),
             })
         parsed.sort(key=lambda x: x.get('createdAt', ''), reverse=True)
         return parsed
