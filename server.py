@@ -160,6 +160,7 @@ async def github_callback_handler(request):
         GITHUB_COOKIE, username,
         max_age=COOKIE_MAX_AGE,
         httponly=True,
+        secure=True,
         samesite='Lax',
         domain='.clung.us',
     )
