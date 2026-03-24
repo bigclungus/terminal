@@ -11,6 +11,7 @@ import re
 import secrets
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 import falkordb as _fdb
 from datetime import datetime, timezone
@@ -79,6 +80,17 @@ def _build_login_page(error=''):
     return LOGIN_HTML.format(styles=_LOGIN_STYLES, body=body)
 
 
+def _is_safe_redirect(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or ""
+        return (host == "clung.us" or host.endswith(".clung.us")) and parsed.scheme == "https"
+    except Exception:
+        return False
+
+
 async def login_handler(request):
     return web.Response(text=_build_login_page(), content_type='text/html')
 
@@ -142,7 +154,7 @@ async def github_callback_handler(request):
         raise web.HTTPForbidden(reason=f'GitHub user {username!r} is not allowed')
 
     next_url = request.cookies.get('gh_oauth_next', '')
-    redirect_to = next_url if next_url and next_url.startswith('https://') and '.clung.us' in next_url else '/'
+    redirect_to = next_url if _is_safe_redirect(next_url) else '/'
     resp = web.HTTPFound(redirect_to)
     resp.set_cookie(
         GITHUB_COOKIE, username,
@@ -192,10 +204,18 @@ HTML = r"""<!DOCTYPE html>
   <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
   <title>BigClungus Live Terminal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <link rel="stylesheet" href="https://hello.clung.us/sitenav.css?v=2">
+  <script src="https://hello.clung.us/sitenav.js?v=2" defer></script>
   <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #0d0d0d; display: flex; flex-direction: column; height: 100vh; font-family: monospace; }
+    /* sitenav.js injects the shared nav as first flex child; override its sticky
+       position so it participates in the column layout instead of floating.
+       Force single-line at all viewport widths — no wrapping on the terminal page. */
+    .sitenav { position: relative; flex-shrink: 0; flex-wrap: nowrap !important; overflow-x: auto; }
+    .sitenav .sitenav-links { flex-wrap: nowrap; }
+    .sitenav .sitenav-links a, .sitenav .sitenav-brand { white-space: nowrap; }
     #header {
       background: #1a1a2e;
       color: #e94560;
@@ -288,17 +308,19 @@ HTML = r"""<!DOCTYPE html>
       overflow: hidden;
     }
     #agents-header {
-      padding: 10px 14px;
+      padding: 8px 14px;
       color: #e94560;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: bold;
       border-bottom: 1px solid #2a2a4e;
+      border-left: 3px solid #e94560;
       flex-shrink: 0;
       letter-spacing: 0.05em;
       text-transform: uppercase;
       display: flex;
       align-items: center;
       gap: 8px;
+      background: #0d1117;
     }
     #agents-header .panel-refresh {
       margin-left: auto;
@@ -327,6 +349,7 @@ HTML = r"""<!DOCTYPE html>
       font-size: 11px;
       font-weight: bold;
       border-bottom: 1px solid #2a2a4e;
+      border-left: 3px solid #58a6ff;
       flex-shrink: 0;
       letter-spacing: 0.05em;
       text-transform: uppercase;
@@ -579,36 +602,6 @@ HTML = r"""<!DOCTYPE html>
       white-space: nowrap;
     }
     #graph-link:hover { color: #58a6ff; border-color: #58a6ff; }
-    #topology-link {
-      color: #8b949e;
-      font-size: 10px;
-      font-weight: normal;
-      text-decoration: none;
-      letter-spacing: 0;
-      text-transform: none;
-      padding: 2px 6px;
-      border: 1px solid #2a2a4e;
-      border-radius: 3px;
-      background: #0d1117;
-      transition: color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-    }
-    #topology-link:hover { color: #58a6ff; border-color: #58a6ff; }
-    #home-link {
-      color: #8b949e;
-      font-size: 10px;
-      font-weight: normal;
-      text-decoration: none;
-      letter-spacing: 0;
-      text-transform: none;
-      padding: 2px 6px;
-      border: 1px solid #2a2a4e;
-      border-radius: 3px;
-      background: #0d1117;
-      transition: color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-    }
-    #home-link:hover { color: #58a6ff; border-color: #58a6ff; }
     #edit-claude-link {
       color: #8b949e;
       font-size: 10px;
@@ -646,9 +639,7 @@ HTML = r"""<!DOCTYPE html>
   <div id="header">
     <span>&#x1F916; BigClungus Live Session</span>
     <span id="status" class="disconnected">&#x25CF; disconnected</span>
-    <a id="home-link" href="https://hello.clung.us/" target="_blank">&#x2190; clung.us</a>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
-    <a id="topology-link" href="/topology" target="_blank">&#x1F5FA; system</a>
     <a id="edit-claude-link" href="/edit-claude-md" target="_blank">&#x270F; claude.md</a>
     <button id="restart-btn">&#x2620; restart</button>
   </div>
@@ -777,8 +768,7 @@ HTML = r"""<!DOCTYPE html>
       const list = document.getElementById('gh-tasks-list');
       const headerText = document.getElementById('gh-tasks-header-text');
 
-      // Filter to only human-initiated goals (discord_user set)
-      const goals = (items || []).filter(item => item.discord_user);
+      const goals = items || [];
 
       // Update header count
       if (headerText) {
@@ -788,7 +778,7 @@ HTML = r"""<!DOCTYPE html>
       }
 
       if (!goals.length) {
-        list.innerHTML = '<div class="gh-empty">No human-initiated goals</div>';
+        list.innerHTML = '<div class="gh-empty">No tasks yet</div>';
         return;
       }
 
@@ -2116,6 +2106,14 @@ async def system_status_handler(request):
     # Add Discord MCP Plugin as a virtual node (not a systemd service)
     nodes.append({"id": "discord-mcp-plugin", "status": "active"})
 
+    # Virtual/external nodes
+    nodes.append({"id": "congress-page", "status": "active", "type": "virtual"})
+    nodes.append({"id": "agents/active/", "status": "active", "type": "virtual"})
+    nodes.append({"id": "agents/fired/", "status": "active", "type": "virtual"})
+    nodes.append({"id": "claude-cli", "status": "active", "type": "virtual"})
+    nodes.append({"id": "healthcheck-loop", "status": "active", "type": "virtual"})
+    nodes.append({"id": "sitenav.js+css", "status": "active", "type": "virtual"})
+
     # Define edges (relationships/dependencies)
     edges = [
         {"from": "discord-mcp-plugin", "to": "claude-bot", "label": "MCP notifications"},
@@ -2129,6 +2127,20 @@ async def system_status_handler(request):
         {"from": "cloudflared", "to": "website", "label": "clung.us :8080"},
         {"from": "cloudflared", "to": "temporal-proxy", "label": "temporal.clung.us"},
         {"from": "temporal-proxy", "to": "temporal", "label": "proxies :8233"},
+        # Congress page
+        {"from": "cloudflared", "to": "congress-page", "label": "hello.clung.us/congress"},
+        {"from": "congress-page", "to": "website", "label": "served by"},
+        {"from": "congress-page", "to": "agents/active/", "label": "reads identities"},
+        {"from": "congress-page", "to": "claude-cli", "label": "persona responses (OAuth)"},
+        # Agent identity system
+        {"from": "agents/active/", "to": "agents/fired/", "label": "fired →"},
+        # Healthcheck workflow
+        {"from": "healthcheck-loop", "to": "temporal", "label": "every 60s"},
+        {"from": "healthcheck-loop", "to": "discord-mcp-plugin", "label": "alerts via inject"},
+        {"from": "healthcheck-loop", "to": "cloudflared", "label": "checks endpoints"},
+        # Shared sitenav
+        {"from": "website", "to": "sitenav.js+css", "label": "serves"},
+        {"from": "sitenav.js+css", "to": "congress-page", "label": "loaded by"},
     ]
 
     return web.Response(
@@ -2196,11 +2208,14 @@ CLAUDE_MD_PATH = '/home/clungus/.claude/CLAUDE.md'
 _EDIT_CLAUDE_MD_STYLE = """
     * { margin:0; padding:0; box-sizing:border-box; }
     body { background:#0d0d0d; color:#d4d4d4; font-family:monospace; padding:24px; }
-    h1 { color:#e94560; font-size:15px; margin-bottom:16px; letter-spacing:.05em; }
-    .back { color:#8b949e; font-size:11px; text-decoration:none; border:1px solid #2a2a4e;
-            border-radius:3px; padding:2px 8px; background:#0d1117; margin-left:12px; }
-    .back:hover { color:#58a6ff; border-color:#58a6ff; }
-    .header { display:flex; align-items:center; margin-bottom:16px; }
+    h1 { color:#e94560; font-size:15px; letter-spacing:.05em; }
+    .breadcrumb { display:flex; align-items:center; gap:6px; margin-bottom:16px;
+                  font-size:11px; color:#555; }
+    .breadcrumb a { color:#8b949e; text-decoration:none; transition:color 0.15s; }
+    .breadcrumb a:hover { color:#58a6ff; }
+    .breadcrumb .sep { color:#333; user-select:none; }
+    .breadcrumb .current { color:#e94560; font-weight:bold; }
+    .header { display:flex; align-items:center; margin-bottom:8px; }
     textarea {
       width:100%; height:calc(100vh - 130px); background:#111122; color:#d4d4d4;
       border:1px solid #2a2a4e; border-radius:4px; padding:12px; font-family:monospace;
@@ -2239,12 +2254,20 @@ async def edit_claude_md_get(request):
 <head>
   <meta charset="utf-8">
   <title>Edit CLAUDE.md \u2014 BigClungus</title>
+  <link rel="stylesheet" href="https://hello.clung.us/sitenav.css?v=2">
+  <script src="https://hello.clung.us/sitenav.js?v=2" defer></script>
   <style>{_EDIT_CLAUDE_MD_STYLE}</style>
 </head>
 <body>
+  <div class="breadcrumb">
+    <a href="https://hello.clung.us/">clung.us</a>
+    <span class="sep">/</span>
+    <a href="/">terminal</a>
+    <span class="sep">/</span>
+    <span class="current">claude.md</span>
+  </div>
   <div class="header">
     <h1>&#x270F; Edit ~/.claude/CLAUDE.md</h1>
-    <a class="back" href="/">&#x2190; terminal</a>
   </div>
   <form method="POST" action="/edit-claude-md">
     <textarea name="content" spellcheck="false">{escaped}</textarea>
