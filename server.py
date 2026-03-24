@@ -235,11 +235,11 @@ HTML = r"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
+  <link rel="icon" type="image/png" href="https://clung.us/favicon.png">
   <title>BigClungus Live Terminal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
-  <link rel="stylesheet" href="https://hello.clung.us/sitenav.css?v=2">
-  <script src="https://hello.clung.us/sitenav.js?v=2" defer></script>
+  <link rel="stylesheet" href="https://clung.us/sitenav.css?v=2">
+  <script src="https://clung.us/sitenav.js?v=2" defer></script>
   <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2041,7 +2041,7 @@ def _fetch_github_tasks() -> list:
                 'id': task_id,
                 'title': task.get('title', task_id),
                 'status': status_label,
-                'url': f'https://hello.clung.us/tasks',
+                'url': f'https://clung.us/tasks',
                 'number': None,
                 'createdAt': started,
                 'updatedAt': finished or started,
@@ -2168,7 +2168,7 @@ async def system_status_handler(request):
         {"from": "cloudflared", "to": "temporal-proxy", "label": "temporal.clung.us"},
         {"from": "temporal-proxy", "to": "temporal", "label": "proxies :8233"},
         # Congress page
-        {"from": "cloudflared", "to": "congress-page", "label": "hello.clung.us/congress"},
+        {"from": "cloudflared", "to": "congress-page", "label": "clung.us/congress"},
         {"from": "congress-page", "to": "website", "label": "served by"},
         {"from": "congress-page", "to": "agents/active/", "label": "reads identities"},
         {"from": "congress-page", "to": "claude-cli", "label": "persona responses (OAuth)"},
@@ -2294,13 +2294,13 @@ async def edit_claude_md_get(request):
 <head>
   <meta charset="utf-8">
   <title>Edit CLAUDE.md \u2014 BigClungus</title>
-  <link rel="stylesheet" href="https://hello.clung.us/sitenav.css?v=2">
-  <script src="https://hello.clung.us/sitenav.js?v=2" defer></script>
+  <link rel="stylesheet" href="https://clung.us/sitenav.css?v=2">
+  <script src="https://clung.us/sitenav.js?v=2" defer></script>
   <style>{_EDIT_CLAUDE_MD_STYLE}</style>
 </head>
 <body>
   <div class="breadcrumb">
-    <a href="https://hello.clung.us/">clung.us</a>
+    <a href="https://clung.us/">clung.us</a>
     <span class="sep">/</span>
     <a href="/">terminal</a>
     <span class="sep">/</span>

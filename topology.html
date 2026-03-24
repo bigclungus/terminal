@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
+  <link rel="icon" type="image/png" href="https://clung.us/favicon.png">
   <title>System Topology — BigClungus</title>
   <script src="/gamecube-sounds.js"></script>
   <style>
@@ -133,6 +133,13 @@
       border-radius: 2px;
       flex-shrink: 0;
     }
+    .legend-diamond {
+      width: 9px;
+      height: 9px;
+      transform: rotate(45deg);
+      border-radius: 1px;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -156,6 +163,7 @@
     <div class="legend-item"><div class="legend-dot" style="background:#888"></div> unknown</div>
     <div class="legend-item"><div class="legend-square" style="background:#4caf50;box-shadow:0 0 5px #4caf50"></div> docker (active)</div>
     <div class="legend-item"><div class="legend-square" style="background:#e94560"></div> docker (down)</div>
+    <div class="legend-item"><div class="legend-diamond" style="background:#7e57c2;box-shadow:0 0 5px #7e57c2"></div> virtual / external</div>
   </div>
 
   <div id="loading">Loading topology...</div>
@@ -171,7 +179,15 @@
     let countdownTimer = null;
     let refreshTimer = null;
 
-    function statusColor(status) {
+    function statusColor(status, type) {
+      if (type === 'virtual') {
+        return {
+          background: '#1a1a3a',
+          border: '#7e57c2',
+          highlight: { background: '#24244e', border: '#9c6fff' },
+          hover: { background: '#24244e', border: '#9c6fff' },
+        };
+      }
       if (status === 'active') {
         return {
           background: '#1a3a1a',
@@ -197,19 +213,29 @@
       };
     }
 
+    function nodeTypeLabel(n) {
+      if (n.type === 'docker') return 'docker container';
+      if (n.type === 'virtual') return 'virtual / external';
+      return 'systemd service';
+    }
+
     function makeNodeItem(n) {
       const isDocker = n.type === 'docker';
-      const color = statusColor(n.status);
-      const glowColor = n.status === 'active' ? '#4caf50' : (n.status === 'failed' || n.status === 'down') ? '#e94560' : null;
+      const isVirtual = n.type === 'virtual';
+      const color = statusColor(n.status, n.type);
+      const glowColor = isVirtual ? '#7e57c2'
+        : n.status === 'active' ? '#4caf50'
+        : (n.status === 'failed' || n.status === 'down') ? '#e94560'
+        : null;
       return {
         id: n.id,
         label: n.id,
-        title: n.id + '\nstatus: ' + n.status + (isDocker ? '\ntype: docker container' : '\ntype: systemd service'),
-        shape: isDocker ? 'square' : 'dot',
+        title: n.id + '\nstatus: ' + n.status + '\ntype: ' + nodeTypeLabel(n),
+        shape: isDocker ? 'square' : isVirtual ? 'diamond' : 'dot',
         color: color,
         font: { color: '#e6edf3', size: 11, face: 'monospace' },
-        borderWidth: n.status === 'active' ? 2 : 1,
-        size: isDocker ? 14 : 18,
+        borderWidth: (n.status === 'active' || isVirtual) ? 2 : 1,
+        size: isDocker ? 14 : isVirtual ? 15 : 18,
         shadow: glowColor ? { enabled: true, color: glowColor, size: 8, x: 0, y: 0 } : { enabled: false },
       };
     }

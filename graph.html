@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <link rel="icon" type="image/png" href="https://hello.clung.us/favicon.png">
+  <link rel="icon" type="image/png" href="https://clung.us/favicon.png">
   <title>Knowledge Graph — BigClungus</title>
   <script src="/gamecube-sounds.js"></script>
   <style>
@@ -283,6 +283,7 @@
   <div id="toolbar">
     <button class="graph-btn" onclick="refreshGraph()">Refresh</button>
     <button class="graph-btn" onclick="fitGraph()">Fit</button>
+    <button class="graph-btn" id="orphan-toggle-btn" onclick="toggleOrphans()" style="display:none">show orphans (0)</button>
     <span id="auto-refresh-indicator">auto-refresh: 60s</span>
     <span id="ingestion-status">&#x1F4CA; loading...</span>
   </div>
@@ -349,6 +350,10 @@
     // Full search index including collapsed leaf nodes.
     // Each entry: { label, group, isLeaf, parentId, parentLabel, relationship, content }
     let leafSearchIndex = [];
+
+    // Orphan node state (degree-0 nodes, hidden by default)
+    let orphanNodes = [];       // raw node objects with degree 0
+    let showOrphans = false;
 
     // Person node identifiers — labels containing any of these are treated as "person hubs"
     const PERSON_LABELS = [
@@ -442,6 +447,122 @@
       const visibleNodes = nodes.filter(n => !leafNodeSet.has(n.id));
       const visibleEdges = edges.filter(e => !leafNodeSet.has(e.from) && !leafNodeSet.has(e.to));
       return { visibleNodes, visibleEdges };
+    }
+
+    /**
+     * After processLeafNodes, call this to separate degree-0 nodes from visibleNodes.
+     * Orphans are hidden by default; use the toggle button to show them.
+     * Returns { mainNodes, mainEdges } with orphans removed from mainNodes.
+     * Also populates the global `orphanNodes` array and adds orphans to leafSearchIndex.
+     */
+    function identifyOrphans(visibleNodes, visibleEdges) {
+      // Compute degree among visible nodes
+      const visibleDegree = {};
+      visibleEdges.forEach(e => {
+        visibleDegree[e.from] = (visibleDegree[e.from] || 0) + 1;
+        visibleDegree[e.to]   = (visibleDegree[e.to]   || 0) + 1;
+      });
+
+      orphanNodes = visibleNodes.filter(n => (visibleDegree[n.id] || 0) === 0);
+      const orphanSet = new Set(orphanNodes.map(n => n.id));
+
+      // Add orphans to the search index so Ctrl+F can still find them
+      orphanNodes.forEach(n => {
+        leafSearchIndex.push({
+          label: n.label || '',
+          group: n.group || '',
+          isLeaf: false,
+          isOrphan: true,
+          parentId: null,
+          parentLabel: null,
+          relationship: null,
+          content: n.title || '',
+          _nodeId: n.id,
+        });
+      });
+
+      const mainNodes = visibleNodes.filter(n => !orphanSet.has(n.id));
+      // mainEdges already have no orphan endpoints since orphans have degree 0
+      return { mainNodes, mainEdges: visibleEdges };
+    }
+
+    /**
+     * Compute fixed grid positions for orphan nodes in the bottom-right corner
+     * of the visible canvas area.
+     */
+    function getOrphanPositions() {
+      const cols = Math.ceil(Math.sqrt(orphanNodes.length + 1));
+      const cellW = 80;
+      const cellH = 60;
+      // Use a large fixed offset so orphans sit well below the main graph
+      const originX = 1200;
+      const originY = 1200;
+      return orphanNodes.map((n, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        return { id: n.id, x: originX + col * cellW, y: originY + row * cellH };
+      });
+    }
+
+    /** Add orphan nodes to the live dataset at fixed positions */
+    function addOrphansToGraph() {
+      const positions = getOrphanPositions();
+      const posMap = {};
+      positions.forEach(p => { posMap[p.id] = p; });
+
+      const items = orphanNodes.map(n => {
+        const pos = posMap[n.id];
+        const item = makeNodeItem(n);
+        // Slightly dimmed so they're visually distinct from main graph nodes
+        item.opacity = 0.55;
+        item.x = pos.x;
+        item.y = pos.y;
+        item.fixed = { x: true, y: true };
+        return item;
+      });
+      nodesDS.update(items);
+    }
+
+    /** Remove orphan nodes from the live dataset */
+    function removeOrphansFromGraph() {
+      nodesDS.remove(orphanNodes.map(n => n.id));
+    }
+
+    /** Toggle the orphan display and update button label */
+    function toggleOrphans() {
+      showOrphans = !showOrphans;
+      const btn = document.getElementById('orphan-toggle-btn');
+      if (showOrphans) {
+        addOrphansToGraph();
+        btn.textContent = 'hide orphans (' + orphanNodes.length + ')';
+        btn.style.color = '#79b8ff';
+        btn.style.borderColor = '#79b8ff';
+      } else {
+        removeOrphansFromGraph();
+        btn.textContent = 'show orphans (' + orphanNodes.length + ')';
+        btn.style.color = '';
+        btn.style.borderColor = '';
+      }
+    }
+
+    /** Refresh the orphan toggle button label/state without changing visibility */
+    function syncOrphanButton() {
+      const btn = document.getElementById('orphan-toggle-btn');
+      if (!btn) return;
+      if (orphanNodes.length === 0) {
+        btn.style.display = 'none';
+        return;
+      }
+      btn.style.display = '';
+      if (showOrphans) {
+        btn.textContent = 'hide orphans (' + orphanNodes.length + ')';
+        btn.style.color = '#79b8ff';
+        btn.style.borderColor = '#79b8ff';
+      } else {
+        btn.textContent = 'show orphans (' + orphanNodes.length + ')';
+        btn.style.color = '';
+        btn.style.borderColor = '';
+      }
     }
 
     function closeLeafPanel() {
@@ -556,11 +677,15 @@
         const data = await fetchGraphData();
         loadingEl.style.display = 'none';
         const { visibleNodes, visibleEdges } = processLeafNodes(data.nodes, data.edges);
-        renderGraph({ nodes: visibleNodes, edges: visibleEdges });
+        const { mainNodes, mainEdges } = identifyOrphans(visibleNodes, visibleEdges);
+        showOrphans = false;
+        syncOrphanButton();
+        renderGraph({ nodes: mainNodes, edges: mainEdges });
         const leafCount = data.nodes.length - visibleNodes.length;
         countsEl.textContent =
-          visibleNodes.length + ' nodes  |  ' + visibleEdges.length + ' edges' +
-          (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '');
+          mainNodes.length + ' nodes  |  ' + mainEdges.length + ' edges' +
+          (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '') +
+          (orphanNodes.length > 0 ? '  |  ' + orphanNodes.length + ' orphaned' : '');
       } catch (e) {
         loadingEl.textContent = 'Error: ' + e.message;
         countsEl.textContent = 'error';
@@ -645,29 +770,42 @@
       try {
         const data = await fetchGraphData();
         const { visibleNodes, visibleEdges } = processLeafNodes(data.nodes, data.edges);
+        const { mainNodes, mainEdges } = identifyOrphans(visibleNodes, visibleEdges);
 
-        // Build lookup maps for incoming visible data
-        const incomingNodeIds = new Set(visibleNodes.map(n => n.id));
-        const incomingEdgeIds = new Set(visibleEdges.map((_, i) => i));
+        // Build lookup maps for incoming main (non-orphan) data
+        const incomingNodeIds = new Set(mainNodes.map(n => n.id));
+        const incomingEdgeIds = new Set(mainEdges.map((_, i) => i));
 
-        // Remove nodes/edges no longer present
-        const removedNodeIds = nodesDS.getIds().filter(id => !incomingNodeIds.has(id));
+        // Also account for currently-shown orphan ids so we can re-add them if needed
+        const orphanIds = new Set(orphanNodes.map(n => n.id));
+
+        // Remove nodes/edges no longer present (exclude currently-shown orphans from removal)
+        const removedNodeIds = nodesDS.getIds().filter(id => !incomingNodeIds.has(id) && !orphanIds.has(id));
         const removedEdgeIds = edgesDS.getIds().filter(id => !incomingEdgeIds.has(id));
         if (removedNodeIds.length) nodesDS.remove(removedNodeIds);
         if (removedEdgeIds.length) edgesDS.remove(removedEdgeIds);
 
-        // Update or add nodes
-        const nodeUpdates = visibleNodes.map(makeNodeItem);
+        // Update or add main nodes
+        const nodeUpdates = mainNodes.map(makeNodeItem);
         nodesDS.update(nodeUpdates);
 
         // Update or add edges
-        const edgeUpdates = visibleEdges.map(makeEdgeItem);
+        const edgeUpdates = mainEdges.map(makeEdgeItem);
         edgesDS.update(edgeUpdates);
+
+        // If orphans were showing, refresh them in place; if not, strip any stale orphan nodes
+        if (showOrphans) {
+          addOrphansToGraph();
+        } else {
+          nodesDS.remove(orphanNodes.map(n => n.id));
+        }
+        syncOrphanButton();
 
         const leafCount = data.nodes.length - visibleNodes.length;
         countsEl.textContent =
-          visibleNodes.length + ' nodes  |  ' + visibleEdges.length + ' edges' +
-          (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '');
+          mainNodes.length + ' nodes  |  ' + mainEdges.length + ' edges' +
+          (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '') +
+          (orphanNodes.length > 0 ? '  |  ' + orphanNodes.length + ' orphaned' : '');
         pulseIndicator();
       } catch (e) {
         countsEl.textContent = 'refresh error';
@@ -797,6 +935,12 @@
             div.innerHTML =
               escapeHtml(entry.label) +
               '<span class="ns-group" style="color:#79b8ff"> in ' + escapeHtml(entry.parentLabel || '?') + '</span>';
+          } else if (entry.isOrphan) {
+            // Orphan node: show label + dim "orphan" tag
+            div.innerHTML =
+              escapeHtml(entry.label) +
+              (groupLabel ? '<span class="ns-group" style="color:' + dotColor + '">&#9679; ' + escapeHtml(groupLabel) + '</span>' : '') +
+              '<span class="ns-group" style="color:#555"> orphan</span>';
           } else {
             div.innerHTML =
               escapeHtml(entry.label) +
@@ -847,6 +991,10 @@
           const parentNode = nodesDS ? nodesDS.get(parentId) : null;
           focusAndFlashNode(parentId);
           openLeafPanel(parentId, parentNode ? parentNode.label : (entry.parentLabel || parentId), entry.label);
+        } else if (entry.isOrphan) {
+          // Orphan node: ensure orphans are visible first, then navigate
+          if (!showOrphans) toggleOrphans();
+          focusAndFlashNode(entry._nodeId);
         } else {
           // Rendered node: navigate directly
           focusAndFlashNode(entry._nodeId);
