@@ -238,8 +238,8 @@ HTML = r"""<!DOCTYPE html>
   <link rel="icon" type="image/png" href="https://clung.us/favicon.png">
   <title>BigClungus Live Terminal</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
-  <link rel="stylesheet" href="https://clung.us/sitenav.css?v=2">
-  <script src="https://clung.us/sitenav.js?v=2" defer></script>
+  <link rel="stylesheet" href="https://clung.us/sitenav.css?v=b6d00bc">
+  <script src="https://clung.us/sitenav.js?v=b6d00bc" defer></script>
   <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2294,8 +2294,8 @@ async def edit_claude_md_get(request):
 <head>
   <meta charset="utf-8">
   <title>Edit CLAUDE.md \u2014 BigClungus</title>
-  <link rel="stylesheet" href="https://clung.us/sitenav.css?v=2">
-  <script src="https://clung.us/sitenav.js?v=2" defer></script>
+  <link rel="stylesheet" href="https://clung.us/sitenav.css?v=b6d00bc">
+  <script src="https://clung.us/sitenav.js?v=b6d00bc" defer></script>
   <style>{_EDIT_CLAUDE_MD_STYLE}</style>
 </head>
 <body>
