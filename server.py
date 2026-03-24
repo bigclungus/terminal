@@ -2029,7 +2029,6 @@ async def gamecube_sounds_handler(request):
 
 async def ingestion_status_handler(request):
     """Return discord_history ingestion progress stats from FalkorDB."""
-    TOTAL_EPISODES = 141
     try:
         r = _fdb.FalkorDB(host='localhost', port=6379)
         g = r.select_graph('discord_history')
@@ -2042,6 +2041,10 @@ async def ingestion_status_handler(request):
             content_type='application/json',
             status=503,
         )
+    # total_episodes is no longer a hardcoded constant — use the actual ingested
+    # count as the total so the display never shows a nonsensical x/y where x > y.
+    # If a true target is known in the future, set it here explicitly.
+    total_episodes = episodes
     try:
         result = subprocess.run(
             'ps aux | grep scrape_discord | grep -v grep | wc -l',
@@ -2050,11 +2053,11 @@ async def ingestion_status_handler(request):
         workers_running = int(result.stdout.strip())
     except Exception:
         workers_running = 0
-    pct = round(episodes / TOTAL_EPISODES * 100, 1) if TOTAL_EPISODES else 0
+    pct = 100.0 if total_episodes == episodes else round(episodes / total_episodes * 100, 1) if total_episodes else 0
     return web.Response(
         text=json.dumps({
             'episodes': episodes,
-            'total_episodes': TOTAL_EPISODES,
+            'total_episodes': total_episodes,
             'entities': nodes,
             'edges': edges,
             'workers_running': workers_running,
