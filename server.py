@@ -5,6 +5,8 @@ served alongside an xterm.js HTML page.
 """
 import asyncio
 import glob
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -26,6 +28,24 @@ COOKIE_MAX_AGE = 86400  # 24 hours
 GITHUB_CLIENT_ID      = os.environ.get('GITHUB_CLIENT_ID', '')
 GITHUB_CLIENT_SECRET  = os.environ.get('GITHUB_CLIENT_SECRET', '')
 GITHUB_ALLOWED_USERS  = {u.lower() for u in os.environ.get('GITHUB_ALLOWED_USERS', '').split(',') if u}
+COOKIE_SECRET         = os.environ.get('COOKIE_SECRET', '')
+
+
+def _sign_cookie(username: str) -> str:
+    """Return username.HMAC-SHA256(username, COOKIE_SECRET) for cookie storage."""
+    sig = hmac.new(COOKIE_SECRET.encode(), username.encode(), hashlib.sha256).hexdigest()
+    return f"{username}.{sig}"
+
+
+def _verify_cookie(value: str) -> str:
+    """Verify a signed cookie value. Returns the username on success, '' on failure."""
+    if not COOKIE_SECRET or '.' not in value:
+        return ''
+    username, _, sig = value.rpartition('.')
+    expected = hmac.new(COOKIE_SECRET.encode(), username.encode(), hashlib.sha256).hexdigest()
+    if hmac.compare_digest(sig, expected):
+        return username
+    return ''
 
 _GITHUB_BTN = """
     <a href="/auth/github" class="github-btn">
@@ -169,7 +189,7 @@ async def github_callback_handler(request):
 </html>"""
     resp = web.Response(text=html, content_type='text/html')
     resp.set_cookie(
-        GITHUB_COOKIE, username,
+        GITHUB_COOKIE, _sign_cookie(username),
         max_age=COOKIE_MAX_AGE,
         httponly=True,
         samesite='Lax',
@@ -183,8 +203,9 @@ async def github_callback_handler(request):
 
 
 def _is_authed(request):
-    # Only GitHub OAuth cookie is accepted
-    gh_user = request.cookies.get(GITHUB_COOKIE, '')
+    # Only GitHub OAuth cookie is accepted; value must have a valid HMAC signature
+    raw = request.cookies.get(GITHUB_COOKIE, '')
+    gh_user = _verify_cookie(raw) if raw else ''
     if gh_user:
         if not GITHUB_ALLOWED_USERS or gh_user.lower() in GITHUB_ALLOWED_USERS:
             return True
@@ -2057,6 +2078,12 @@ async def github_tasks_handler(request):
 RESTART_PASSWORD = os.environ.get('RESTART_PASSWORD', '')
 
 async def restart_bot_handler(request):
+    if not _is_authed(request):
+        return web.Response(
+            status=401,
+            text=json.dumps({'ok': False, 'error': 'authentication required'}),
+            content_type='application/json',
+        )
     try:
         body = await request.json()
     except Exception:
