@@ -1968,7 +1968,7 @@ async def restart_bot_handler(request):
 
 SERVICES = [
     "claude-bot", "terminal-server", "website", "1998",
-    "temporal", "temporal-worker", "cloudflared", "discord-bridge"
+    "temporal", "temporal-worker", "temporal-proxy", "cloudflared"
 ]
 
 async def system_status_handler(request):
@@ -2000,17 +2000,22 @@ async def system_status_handler(request):
     except Exception:
         pass
 
+    # Add Discord MCP Plugin as a virtual node (not a systemd service)
+    nodes.append({"id": "discord-mcp-plugin", "status": "active"})
+
     # Define edges (relationships/dependencies)
     edges = [
-        {"from": "claude-bot", "to": "terminal-server", "label": "streams to"},
-        {"from": "claude-bot", "to": "cloudflared", "label": "via"},
+        {"from": "discord-mcp-plugin", "to": "claude-bot", "label": "MCP notifications"},
+        {"from": "claude-bot", "to": "discord-mcp-plugin", "label": "inject :9876"},
+        {"from": "claude-bot", "to": "temporal-worker", "label": "spawns workflows"},
+        {"from": "claude-bot", "to": "docker-graphiti-mcp-1", "label": "memory queries"},
         {"from": "terminal-server", "to": "docker-graphiti-mcp-1", "label": "queries"},
         {"from": "docker-graphiti-mcp-1", "to": "docker-falkordb-1", "label": "stores in"},
         {"from": "temporal-worker", "to": "temporal", "label": "connects to"},
-        {"from": "temporal-worker", "to": "discord-bridge", "label": "posts via"},
         {"from": "cloudflared", "to": "terminal-server", "label": "terminal.clung.us"},
-        {"from": "cloudflared", "to": "website", "label": "hello.clung.us"},
-        {"from": "cloudflared", "to": "temporal", "label": "temporal.clung.us"},
+        {"from": "cloudflared", "to": "website", "label": "clung.us :8080"},
+        {"from": "cloudflared", "to": "temporal-proxy", "label": "temporal.clung.us"},
+        {"from": "temporal-proxy", "to": "temporal", "label": "proxies :8233"},
     ]
 
     return web.Response(
