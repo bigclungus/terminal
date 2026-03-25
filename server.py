@@ -251,19 +251,18 @@ HTML = r"""<!DOCTYPE html>
     .sitenav { position: relative; flex-shrink: 0; flex-wrap: nowrap !important; overflow-x: auto; }
     .sitenav .sitenav-links { flex-wrap: nowrap; }
     .sitenav .sitenav-links a, .sitenav .sitenav-brand { white-space: nowrap; }
-    #header {
-      background: #1a1a2e;
-      color: #e94560;
-      padding: 8px 16px;
-      font-size: 14px;
-      font-weight: bold;
+    /* Unified session bar — tabs left, status+actions right */
+    #session-bar {
+      background: #2d2d44;
+      border-top: 1px solid #4a4a6a;
+      border-bottom: 1px solid #4a4a6a;
       display: flex;
-      align-items: center;
-      gap: 12px;
-      border-bottom: 1px solid #e94560;
+      align-items: stretch;
       flex-shrink: 0;
+      padding: 0 12px 0 0;
+      gap: 0;
     }
-    #status { font-size: 11px; color: #888; margin-left: auto; }
+    #status { font-size: 11px; color: #888; margin-left: auto; padding: 0 12px; white-space: nowrap; align-self: center; }
     #status.connected { color: #4caf50; }
     #status.disconnected { color: #e94560; }
     #healthbar {
@@ -622,31 +621,27 @@ HTML = r"""<!DOCTYPE html>
       text-align: center;
       padding: 24px 8px;
     }
-    #graph-link {
+    /* Action button/link shared ghost style */
+    #graph-link, #edit-claude-link, #restart-btn {
       color: #8b949e;
       font-size: 10px;
       font-weight: normal;
       text-decoration: none;
       letter-spacing: 0;
       text-transform: none;
-      padding: 2px 6px;
-      border: 1px solid #2a2a4e;
+      padding: 2px 8px;
+      border: 1px solid transparent;
       border-radius: 3px;
-      background: #0d1117;
+      background: none;
       transition: color 0.15s, border-color 0.15s;
       white-space: nowrap;
+      align-self: center;
+      cursor: pointer;
+      font-family: monospace;
     }
-    #graph-link:hover { color: #58a6ff; border-color: #58a6ff; }
-    /* Tab bar */
-    #tab-bar {
-      background: #111122;
-      border-bottom: 1px solid #2a2a4e;
-      display: flex;
-      align-items: center;
-      gap: 0;
-      flex-shrink: 0;
-      padding: 0 12px;
-    }
+    #graph-link:hover, #edit-claude-link:hover { color: #58a6ff; border-color: #4a4a6a; }
+    #restart-btn:hover { color: #e94560; border-color: #4a4a6a; }
+    /* Tab buttons — live inside #session-bar */
     .tab-btn {
       background: none;
       border: none;
@@ -654,13 +649,16 @@ HTML = r"""<!DOCTYPE html>
       color: #666;
       font-family: monospace;
       font-size: 12px;
-      padding: 6px 16px 5px;
+      padding: 7px 16px 6px;
       cursor: pointer;
       letter-spacing: 0.04em;
       transition: color 0.15s, border-color 0.15s;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
     }
     .tab-btn:hover { color: #aaa; }
-    .tab-btn.active { color: #e94560; border-bottom-color: #e94560; }
+    .tab-btn.active { color: #c0c0ff; border-bottom-color: #7c7cff; }
     #giga-frame-wrap {
       flex: 1;
       overflow: hidden;
@@ -673,50 +671,16 @@ HTML = r"""<!DOCTYPE html>
       border: none;
       background: #0d0d0d;
     }
-    #edit-claude-link {
-      color: #8b949e;
-      font-size: 10px;
-      font-weight: normal;
-      text-decoration: none;
-      letter-spacing: 0;
-      text-transform: none;
-      padding: 2px 6px;
-      border: 1px solid #2a2a4e;
-      border-radius: 3px;
-      background: #0d1117;
-      transition: color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-    }
-    #edit-claude-link:hover { color: #58a6ff; border-color: #58a6ff; }
-    #restart-btn {
-      color: #8b949e;
-      font-size: 10px;
-      font-weight: normal;
-      text-decoration: none;
-      letter-spacing: 0;
-      text-transform: none;
-      padding: 2px 6px;
-      border: 1px solid #2a2a4e;
-      border-radius: 3px;
-      background: #0d1117;
-      transition: color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-      cursor: pointer;
-    }
-    #restart-btn:hover { color: #e94560; border-color: #e94560; }
   </style>
 </head>
 <body>
-  <div id="header">
-    <span>&#x1F916; BigClungus Live Session</span>
+  <div id="session-bar">
+    <button class="tab-btn active" id="tab-big" onclick="switchTab('big')">&#x1F916; BigClungus</button>
+    <button class="tab-btn" id="tab-giga" onclick="switchTab('giga')">&#x26A1; GigaClungus</button>
     <span id="status" class="disconnected">&#x25CF; disconnected</span>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
     <a id="edit-claude-link" href="/edit-claude-md" target="_blank">&#x270F; claude.md</a>
     <button id="restart-btn">&#x2620; restart</button>
-  </div>
-  <div id="tab-bar">
-    <button class="tab-btn active" id="tab-big" onclick="switchTab('big')">&#x1F916; BigClungus</button>
-    <button class="tab-btn" id="tab-giga" onclick="switchTab('giga')">&#x26A1; GigaClungus</button>
   </div>
   <div id="healthbar">
     <div class="hb-metric">
@@ -1168,7 +1132,7 @@ HTML = r"""<!DOCTYPE html>
     });
 
     // GameCube sounds on all buttons and nav links
-    document.querySelectorAll('button, #header a').forEach(function(el) {
+    document.querySelectorAll('button, #session-bar a').forEach(function(el) {
       el.addEventListener('mouseenter', function() { if (window.GCSounds) GCSounds.hover(); });
       el.addEventListener('click', function() { if (window.GCSounds) GCSounds.click(); }, true);
     });
