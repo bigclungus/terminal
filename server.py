@@ -637,6 +637,42 @@ HTML = r"""<!DOCTYPE html>
       white-space: nowrap;
     }
     #graph-link:hover { color: #58a6ff; border-color: #58a6ff; }
+    /* Tab bar */
+    #tab-bar {
+      background: #111122;
+      border-bottom: 1px solid #2a2a4e;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      flex-shrink: 0;
+      padding: 0 12px;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #666;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 16px 5px;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: #aaa; }
+    .tab-btn.active { color: #e94560; border-bottom-color: #e94560; }
+    #giga-frame-wrap {
+      flex: 1;
+      overflow: hidden;
+      display: none;
+    }
+    #giga-frame-wrap.visible { display: flex; }
+    #giga-frame {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #0d0d0d;
+    }
     #edit-claude-link {
       color: #8b949e;
       font-size: 10px;
@@ -677,6 +713,10 @@ HTML = r"""<!DOCTYPE html>
     <a id="graph-link" href="/graph" target="_blank">&#x238B; Knowledge Graph</a>
     <a id="edit-claude-link" href="/edit-claude-md" target="_blank">&#x270F; claude.md</a>
     <button id="restart-btn">&#x2620; restart</button>
+  </div>
+  <div id="tab-bar">
+    <button class="tab-btn active" id="tab-big" onclick="switchTab('big')">&#x1F916; BigClungus</button>
+    <button class="tab-btn" id="tab-giga" onclick="switchTab('giga')">&#x26A1; GigaClungus</button>
   </div>
   <div id="healthbar">
     <div class="hb-metric">
@@ -731,6 +771,9 @@ HTML = r"""<!DOCTYPE html>
         <div id="agents-empty">No recent tasks</div>
       </div>
     </div>
+  </div>
+  <div id="giga-frame-wrap">
+    <iframe id="giga-frame" src="about:blank" title="GigaClungus Terminal"></iframe>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
@@ -1130,10 +1173,179 @@ HTML = r"""<!DOCTYPE html>
       el.addEventListener('click', function() { if (window.GCSounds) GCSounds.click(); }, true);
     });
 
+    // Tab switching
+    let gigaLoaded = false;
+    function switchTab(name) {
+      const mainEl = document.getElementById('main');
+      const healthEl = document.getElementById('healthbar');
+      const gigaWrap = document.getElementById('giga-frame-wrap');
+      const tabBig = document.getElementById('tab-big');
+      const tabGiga = document.getElementById('tab-giga');
+      if (name === 'giga') {
+        mainEl.style.display = 'none';
+        healthEl.style.display = 'none';
+        gigaWrap.classList.add('visible');
+        tabBig.classList.remove('active');
+        tabGiga.classList.add('active');
+        if (!gigaLoaded) {
+          document.getElementById('giga-frame').src = '/giga';
+          gigaLoaded = true;
+        }
+      } else {
+        mainEl.style.display = '';
+        healthEl.style.display = '';
+        gigaWrap.classList.remove('visible');
+        tabBig.classList.add('active');
+        tabGiga.classList.remove('active');
+        fitAddon.fit();
+      }
+    }
+
   </script>
 </body>
 </html>
 """
+
+GIGA_HTML = r"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GigaClungus Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d0d0d; display: flex; flex-direction: column; height: 100vh; }
+    #giga-status {
+      background: #1a1a2e;
+      color: #888;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 4px 12px;
+      border-bottom: 1px solid #2a2a4e;
+      flex-shrink: 0;
+    }
+    #giga-status.connected { color: #4caf50; }
+    #giga-status.disconnected { color: #e94560; }
+    #giga-terminal { flex: 1; padding: 4px; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <div id="giga-status" class="disconnected">&#x26A1; GigaClungus — disconnected</div>
+  <div id="giga-terminal"></div>
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script>
+    const term = new Terminal({
+      theme: { background: '#0d0d0d', foreground: '#d4d4d4', cursor: '#26c0b0' },
+      convertEol: true,
+      scrollback: 5000,
+      fontSize: 13,
+      fontFamily: 'Consolas, "Courier New", monospace',
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('giga-terminal'));
+    fitAddon.fit();
+    window.addEventListener('resize', () => fitAddon.fit());
+
+    const statusEl = document.getElementById('giga-status');
+
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      // Connect to parent origin's /giga-ws if we're in an iframe, otherwise same host
+      const host = window.parent !== window
+        ? new URL(document.referrer || location.href).host
+        : location.host;
+      const ws = new WebSocket(proto + '//' + host + '/giga-ws');
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => {
+        statusEl.textContent = '\u26A1 GigaClungus \u2014 live';
+        statusEl.className = 'connected';
+      };
+      ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(e.data), () => term.scrollToBottom());
+        } else {
+          term.write(e.data, () => term.scrollToBottom());
+        }
+      };
+      ws.onclose = () => {
+        statusEl.textContent = '\u26A1 GigaClungus \u2014 disconnected \u2014 reconnecting...';
+        statusEl.className = 'disconnected';
+        setTimeout(connect, 3000);
+      };
+      ws.onerror = () => ws.close();
+    }
+    connect();
+  </script>
+</body>
+</html>
+"""
+
+GIGA_TTYD_PORT = 7683
+GIGA_LOGFILE = "/tmp/giga-screenlog.txt"
+
+
+async def giga_page_handler(request):
+    return web.Response(text=GIGA_HTML, content_type='text/html')
+
+
+async def giga_websocket_handler(request):
+    """WebSocket proxy: bridge client to ttyd running on port GIGA_TTYD_PORT.
+
+    ttyd speaks the ttyd WebSocket protocol (binary frames, resize msgs, etc.).
+    We relay bytes transparently in both directions.
+    """
+    if not _is_authed(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.close(code=4401, message=b'Unauthorized')
+        return ws
+
+    client_ws = web.WebSocketResponse()
+    await client_ws.prepare(request)
+
+    ttyd_url = f'ws://127.0.0.1:{GIGA_TTYD_PORT}/ws'
+    try:
+        async with ClientSession() as session:
+            async with session.ws_connect(ttyd_url, protocols=['tty']) as server_ws:
+                async def relay_to_client():
+                    async for msg in server_ws:
+                        if client_ws.closed:
+                            break
+                        if msg.type == 0x2:  # WSMsgType.BINARY
+                            await client_ws.send_bytes(msg.data)
+                        elif msg.type == 0x1:  # WSMsgType.TEXT
+                            await client_ws.send_str(msg.data)
+                        else:
+                            break
+
+                async def relay_to_server():
+                    async for msg in client_ws:
+                        if server_ws.closed:
+                            break
+                        if msg.type == 0x2:
+                            await server_ws.send_bytes(msg.data)
+                        elif msg.type == 0x1:
+                            await server_ws.send_str(msg.data)
+                        else:
+                            break
+
+                done, pending = await asyncio.wait(
+                    [asyncio.ensure_future(relay_to_client()),
+                     asyncio.ensure_future(relay_to_server())],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+    except Exception as exc:
+        # ttyd not reachable — send error message to terminal
+        if not client_ws.closed:
+            msg = f'\r\n\x1b[31m[giga-terminal] could not connect to ttyd: {exc}\x1b[0m\r\n'
+            await client_ws.send_str(msg)
+
+    return client_ws
+
 
 async def index(request):
     return web.Response(text=HTML, content_type='text/html')
@@ -2349,6 +2561,8 @@ app.router.add_get('/graph-data', graph_data_handler)
 app.router.add_get('/graph', graph_page_handler)
 app.router.add_get('/ingestion-status', ingestion_status_handler)
 app.router.add_get('/ws', websocket_handler)
+app.router.add_get('/giga', giga_page_handler)
+app.router.add_get('/giga-ws', giga_websocket_handler)
 app.router.add_get('/tasks', tasks_handler)
 app.router.add_get('/github-tasks', github_tasks_handler)
 app.router.add_get('/task-output/{agentId}', task_output_handler)
