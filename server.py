@@ -1261,12 +1261,26 @@ GIGA_HTML = r"""<!DOCTYPE html>
       ws.onopen = () => {
         statusEl.textContent = '\u26A1 GigaClungus \u2014 live';
         statusEl.className = 'connected';
+        // ttyd requires an init message: plain JSON with AuthToken + terminal dimensions.
+        // This triggers ttyd to spawn the pty process and send the initial screen repaint.
+        const init = JSON.stringify({AuthToken: '', columns: term.cols, rows: term.rows});
+        ws.send(new TextEncoder().encode(init));
       };
       ws.onmessage = (e) => {
         if (e.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(e.data), () => term.scrollToBottom());
+          const buf = new Uint8Array(e.data);
+          if (buf.length === 0) return;
+          // ttyd binary frames: first byte is message type.
+          // 0x30='0' output data, 0x31='1' set_window_title, 0x32='2' set_preferences.
+          // Only write type '0' (output) frames to the terminal; strip the prefix byte.
+          if (buf[0] === 0x30) {
+            term.write(buf.slice(1), () => term.scrollToBottom());
+          }
         } else {
-          term.write(e.data, () => term.scrollToBottom());
+          // Text frames: also prefixed with type byte as a character.
+          if (e.data.length > 0 && e.data[0] === '0') {
+            term.write(e.data.slice(1), () => term.scrollToBottom());
+          }
         }
       };
       ws.onclose = () => {
