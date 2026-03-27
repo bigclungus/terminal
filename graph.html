@@ -361,9 +361,6 @@
     let orphanNodes = [];       // raw node objects with degree 0
     let showOrphans = false;
 
-    // Viewport culling state (managed inside renderGraph, but global for cross-function access)
-    let culledNodeIds = new Set();  // nodes currently hidden by viewport culling
-    let physicsSettled = false;     // true after initial stabilization completes
 
     // Person node identifiers — labels containing any of these are treated as "person hubs"
     const PERSON_LABELS = [
@@ -579,14 +576,6 @@
      * Isolate a node: dim everything not directly connected to it.
      */
     function isolateNode(nodeId) {
-      // Unhide any viewport-culled nodes before isolation takes over hidden state
-      if (culledNodeIds.size > 0) {
-        const unhide = [];
-        culledNodeIds.forEach(function (id) { unhide.push({ id: id, hidden: false }); });
-        nodesDS.update(unhide);
-        culledNodeIds = new Set();
-      }
-
       // Find all connected node IDs
       const connectedNodeIds = new Set([nodeId]);
       const connectedEdgeIds = new Set();
@@ -683,8 +672,6 @@
       savedNodeStates = {};
       savedEdgeStates = {};
       isolatedNodeId = null;
-      // Clear viewport culling state so next cull pass starts fresh
-      culledNodeIds = new Set();
 
       // Hide the reset button
       var resetBtn = document.getElementById('reset-isolation-btn');
@@ -949,80 +936,11 @@
         hoveredNodeEdges = [];
       });
 
-      // ── Viewport culling ───────────────────────────────────────────────────
-      // Hide off-screen nodes to avoid rendering them. Uses hidden:true which
-      // also removes them from physics, but physics is disabled after
-      // stabilization anyway, so the layout is already settled.
-      let cullingFrame = null;
-
-      graphNetwork.once('stabilizationIterationsDone', function () {
-        // Physics runs during initial layout; once settled, we can safely cull
-        physicsSettled = true;
-        setTimeout(scheduleCulling, 100);
-      });
-
-      function cullToViewport() {
-        if (!graphNetwork || !nodesDS) return;
-        // Don't cull until physics has settled (nodes are still moving)
-        if (!physicsSettled) return;
-        // Don't cull while isolation filter is active — it manages visibility
-        if (isolatedNodeId) return;
-
-        const scale = graphNetwork.getScale();
-        const viewPos = graphNetwork.getViewPosition();
-        const canvasEl = document.getElementById('graph-canvas');
-        const halfW = (canvasEl.clientWidth / 2) / scale;
-        const halfH = (canvasEl.clientHeight / 2) / scale;
-        // Generous margin so nodes don't pop in/out at edges
-        const margin = 300 / scale;
-        const left   = viewPos.x - halfW - margin;
-        const right  = viewPos.x + halfW + margin;
-        const top    = viewPos.y - halfH - margin;
-        const bottom = viewPos.y + halfH + margin;
-
-        const positions = graphNetwork.getPositions();
-        const updates = [];
-        const newCulled = new Set();
-
-        nodesDS.get().forEach(function (n) {
-          const pos = positions[n.id];
-          if (!pos) return;
-
-          const inView = pos.x >= left && pos.x <= right && pos.y >= top && pos.y <= bottom;
-          const wasCulled = culledNodeIds.has(n.id);
-
-          if (!inView && !wasCulled) {
-            updates.push({ id: n.id, hidden: true });
-            newCulled.add(n.id);
-          } else if (inView && wasCulled) {
-            updates.push({ id: n.id, hidden: false });
-          } else if (!inView) {
-            newCulled.add(n.id);
-          }
-        });
-
-        culledNodeIds = newCulled;
-        if (updates.length > 0) nodesDS.update(updates);
-      }
-
-      function scheduleCulling() {
-        if (cullingFrame) return;
-        cullingFrame = requestAnimationFrame(function () {
-          cullingFrame = null;
-          cullToViewport();
-        });
-      }
-
-      graphNetwork.on('zoom', scheduleCulling);
-      graphNetwork.on('dragEnd', scheduleCulling);
-      graphNetwork.on('dragging', scheduleCulling);
-      graphNetwork.on('animationFinished', scheduleCulling);
     }
 
     async function refreshGraph() {
-      // Reset any active isolation and viewport culling before refreshing data
+      // Reset any active isolation before refreshing data
       resetIsolation();
-      culledNodeIds = new Set();
       if (!graphNetwork || !nodesDS || !edgesDS) {
         await loadGraph();
         return;
