@@ -771,10 +771,11 @@ HTML = r"""<!DOCTYPE html>
         statusEl.className = 'connected';
       };
       ws.onmessage = (e) => {
+        const atBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
         if (e.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(e.data), () => term.scrollToBottom());
+          term.write(new Uint8Array(e.data), () => { if (atBottom) term.scrollToBottom(); });
         } else {
-          term.write(e.data, () => term.scrollToBottom());
+          term.write(e.data, () => { if (atBottom) term.scrollToBottom(); });
         }
       };
       ws.onclose = () => {
@@ -1238,12 +1239,14 @@ GIGA_HTML = r"""<!DOCTYPE html>
           // 0x30='0' output data, 0x31='1' set_window_title, 0x32='2' set_preferences.
           // Only write type '0' (output) frames to the terminal; strip the prefix byte.
           if (buf[0] === 0x30) {
-            term.write(buf.slice(1), () => term.scrollToBottom());
+            const atBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
+            term.write(buf.slice(1), () => { if (atBottom) term.scrollToBottom(); });
           }
         } else {
           // Text frames: also prefixed with type byte as a character.
           if (e.data.length > 0 && e.data[0] === '0') {
-            term.write(e.data.slice(1), () => term.scrollToBottom());
+            const atBottom = term.buffer.active.viewportY >= term.buffer.active.baseY;
+            term.write(e.data.slice(1), () => { if (atBottom) term.scrollToBottom(); });
           }
         }
       };
