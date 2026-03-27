@@ -292,7 +292,7 @@
 
   <!-- Node search overlay -->
   <div id="node-search-overlay">
-    <input id="node-search-input" type="text" placeholder="Search nodes… (Enter to go, Esc to close)" autocomplete="off" spellcheck="false">
+    <input id="node-search-input" type="text" placeholder="Search nodes... (Enter to go, Esc to close)" autocomplete="off" spellcheck="false">
     <div id="node-search-results"></div>
     <div id="node-search-hint"></div>
   </div>
@@ -318,51 +318,55 @@
     </table>
   </div>
 
-  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <!-- Sigma.js + Graphology from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
+
   <script>
+    // ── Color palette ──────────────────────────────────────────────────────────
     const GROUP_COLORS = {
-      Person:    { background: '#f0883e', border: '#bd561d', highlight: { background: '#ffab70', border: '#f0883e' } },
-      Place:     { background: '#bc8cff', border: '#8957e5', highlight: { background: '#d2a8ff', border: '#bc8cff' } },
-      Company:   { background: '#58a6ff', border: '#1f6feb', highlight: { background: '#79b8ff', border: '#58a6ff' } },
-      Tech:      { background: '#3fb950', border: '#238636', highlight: { background: '#56d364', border: '#3fb950' } },
-      Politics:  { background: '#f85149', border: '#cf222e', highlight: { background: '#ffa198', border: '#f85149' } },
-      Concept:   { background: '#d29922', border: '#9e6a03', highlight: { background: '#e3b341', border: '#d29922' } },
-      Entity:    { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } },
+      Person:    '#f0883e',
+      Place:     '#bc8cff',
+      Company:   '#58a6ff',
+      Tech:      '#3fb950',
+      Politics:  '#f85149',
+      Concept:   '#d29922',
+      Entity:    '#8b949e',
     };
+    const DEFAULT_COLOR = '#8b949e';
 
-    const DEFAULT_COLOR = { background: '#8b949e', border: '#57606a', highlight: { background: '#adbac7', border: '#8b949e' } };
-
-    // Build legend from GROUP_COLORS (excluding the fallback Entity entry)
+    // Build legend
     (function () {
       const el = document.getElementById('legend');
       Object.entries(GROUP_COLORS).filter(([g]) => g !== 'Entity').forEach(function ([group, col]) {
-        el.innerHTML += '<div class="legend-item"><div class="legend-dot" style="background:' + col.background + '"></div> ' + group + '</div>';
+        el.innerHTML += '<div class="legend-item"><div class="legend-dot" style="background:' + col + '"></div> ' + group + '</div>';
       });
     })();
 
-    let graphNetwork = null;
-    let nodesDS = null;
-    let edgesDS = null;
+    // ── State ──────────────────────────────────────────────────────────────────
+    let sigmaInstance = null;
+    let graph = null;                   // Graphology instance (full graph minus orphans)
+    let fullGraph = null;               // Graphology instance (full graph including orphans when shown)
 
-    // Node isolation state
-    let isolatedNodeId = null;       // currently isolated node, or null
-    let savedNodeStates = {};        // original node states before dimming
-    let savedEdgeStates = {};        // original edge states before dimming
+    let isolatedNodeId = null;
+    let hiddenNodes = new Set();
+    let hiddenEdges = new Set();
 
-    // Leaf-node collapse state (populated in processLeafNodes)
-    let leafDetails = {};   // personNodeId -> [{label, relationship, content}]
+    // Leaf-node collapse state
+    let leafDetails = {};
     let leafNodeSet = new Set();
-
-    // Full search index including collapsed leaf nodes.
-    // Each entry: { label, group, isLeaf, parentId, parentLabel, relationship, content }
     let leafSearchIndex = [];
 
-    // Orphan node state (degree-0 nodes, hidden by default)
-    let orphanNodes = [];       // raw node objects with degree 0
+    // Orphan state
+    let orphanNodes = [];
+    let orphanNodeData = [];            // raw node objects for orphans
     let showOrphans = false;
 
+    // Raw data cache for refresh
+    let rawNodes = [];
+    let rawEdges = [];
 
-    // Person node identifiers — labels containing any of these are treated as "person hubs"
+    // Person node identifiers
     const PERSON_LABELS = [
       'jaboostin', 'justin',
       'centronias', 'charles', 'kyle', 'dylan',
@@ -376,33 +380,27 @@
       return PERSON_LABELS.some(p => lc.includes(p));
     }
 
-    /**
-     * Given the raw nodes/edges arrays, compute leafDetails and leafNodeSet,
-     * then return { visibleNodes, visibleEdges } with leaf nodes stripped out.
-     */
+    // ── Leaf node processing ───────────────────────────────────────────────────
     function processLeafNodes(nodes, edges) {
       leafDetails = {};
       leafNodeSet = new Set();
 
-      // Build a node-id lookup
       const nodeById = {};
       nodes.forEach(n => { nodeById[n.id] = n; });
 
-      // Compute degree for every node id
       const degree = {};
       edges.forEach(e => {
         degree[e.from] = (degree[e.from] || 0) + 1;
         degree[e.to]   = (degree[e.to]   || 0) + 1;
       });
 
-      // Identify leaf nodes
       nodes.forEach(n => {
-        if ((degree[n.id] || 0) !== 1) return;          // must have exactly one connection
+        if ((degree[n.id] || 0) !== 1) return;
         const edge = edges.find(e => e.from === n.id || e.to === n.id);
         if (!edge) return;
         const otherId = edge.from === n.id ? edge.to : edge.from;
         const other   = nodeById[otherId];
-        if (!isPersonNode(other)) return;                // hub must be a person
+        if (!isPersonNode(other)) return;
 
         leafNodeSet.add(n.id);
         if (!leafDetails[otherId]) leafDetails[otherId] = [];
@@ -413,14 +411,12 @@
         });
       });
 
-      // Sort each person's leaf list alphabetically by label
       Object.values(leafDetails).forEach(arr =>
         arr.sort((a, b) => a.label.localeCompare(b.label))
       );
 
-      // Build the full search index: rendered nodes + collapsed leaf nodes
+      // Build search index
       leafSearchIndex = [];
-      // Rendered (non-leaf) nodes
       nodes.filter(n => !leafNodeSet.has(n.id)).forEach(n => {
         leafSearchIndex.push({
           label: n.label || '',
@@ -433,7 +429,6 @@
           _nodeId: n.id,
         });
       });
-      // Collapsed leaf nodes
       Object.entries(leafDetails).forEach(([parentId, leaves]) => {
         const parentNode = nodeById[parentId];
         const parentLabel = parentNode ? (parentNode.label || parentId) : parentId;
@@ -456,25 +451,18 @@
       return { visibleNodes, visibleEdges };
     }
 
-    /**
-     * After processLeafNodes, call this to separate degree-0 nodes from visibleNodes.
-     * Orphans are hidden by default; use the toggle button to show them.
-     * Returns { mainNodes, mainEdges } with orphans removed from mainNodes.
-     * Also populates the global `orphanNodes` array and adds orphans to leafSearchIndex.
-     */
     function identifyOrphans(visibleNodes, visibleEdges) {
-      // Compute degree among visible nodes
       const visibleDegree = {};
       visibleEdges.forEach(e => {
         visibleDegree[e.from] = (visibleDegree[e.from] || 0) + 1;
         visibleDegree[e.to]   = (visibleDegree[e.to]   || 0) + 1;
       });
 
-      orphanNodes = visibleNodes.filter(n => (visibleDegree[n.id] || 0) === 0);
-      const orphanSet = new Set(orphanNodes.map(n => n.id));
+      orphanNodeData = visibleNodes.filter(n => (visibleDegree[n.id] || 0) === 0);
+      orphanNodes = orphanNodeData;
+      const orphanSet = new Set(orphanNodeData.map(n => n.id));
 
-      // Add orphans to the search index so Ctrl+F can still find them
-      orphanNodes.forEach(n => {
+      orphanNodeData.forEach(n => {
         leafSearchIndex.push({
           label: n.label || '',
           group: n.group || '',
@@ -489,207 +477,136 @@
       });
 
       const mainNodes = visibleNodes.filter(n => !orphanSet.has(n.id));
-      // mainEdges already have no orphan endpoints since orphans have degree 0
       return { mainNodes, mainEdges: visibleEdges };
     }
 
-    /**
-     * Compute fixed grid positions for orphan nodes in the bottom-right corner
-     * of the visible canvas area.
-     */
-    function getOrphanPositions() {
-      const cols = Math.ceil(Math.sqrt(orphanNodes.length + 1));
-      const cellW = 80;
-      const cellH = 60;
-      // Use a large fixed offset so orphans sit well below the main graph
-      const originX = 1200;
-      const originY = 1200;
-      return orphanNodes.map((n, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        return { id: n.id, x: originX + col * cellW, y: originY + row * cellH };
-      });
-    }
-
-    /** Add orphan nodes to the live dataset at fixed positions */
-    function addOrphansToGraph() {
-      const positions = getOrphanPositions();
-      const posMap = {};
-      positions.forEach(p => { posMap[p.id] = p; });
-
-      const items = orphanNodes.map(n => {
-        const pos = posMap[n.id];
-        const item = makeNodeItem(n);
-        // Slightly dimmed so they're visually distinct from main graph nodes
-        item.opacity = 0.55;
-        item.x = pos.x;
-        item.y = pos.y;
-        item.fixed = { x: true, y: true };
-        return item;
-      });
-      nodesDS.update(items);
-    }
-
-    /** Remove orphan nodes from the live dataset */
-    function removeOrphansFromGraph() {
-      nodesDS.remove(orphanNodes.map(n => n.id));
-    }
-
-    /** Toggle the orphan display and update button label */
+    // ── Orphan toggle ──────────────────────────────────────────────────────────
     function toggleOrphans() {
       showOrphans = !showOrphans;
-      const btn = document.getElementById('orphan-toggle-btn');
       if (showOrphans) {
         addOrphansToGraph();
-        btn.textContent = 'hide orphans (' + orphanNodes.length + ')';
-        btn.style.color = '#79b8ff';
-        btn.style.borderColor = '#79b8ff';
       } else {
         removeOrphansFromGraph();
-        btn.textContent = 'show orphans (' + orphanNodes.length + ')';
-        btn.style.color = '';
-        btn.style.borderColor = '';
       }
+      syncOrphanButton();
     }
 
-    /** Refresh the orphan toggle button label/state without changing visibility */
+    function addOrphansToGraph() {
+      if (!graph) return;
+      const cols = Math.ceil(Math.sqrt(orphanNodeData.length + 1));
+      const cellW = 80;
+      const cellH = 60;
+      const originX = 1200;
+      const originY = 1200;
+      orphanNodeData.forEach((n, i) => {
+        const key = String(n.id);
+        if (graph.hasNode(key)) return;
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const hasLeaves = !!leafDetails[n.id];
+        graph.addNode(key, {
+          x: originX + col * cellW,
+          y: originY + row * cellH,
+          label: n.label || '',
+          size: hasLeaves ? 8 : 5,
+          color: GROUP_COLORS[n.group] || DEFAULT_COLOR,
+          type: 'circle',
+          _group: n.group || '',
+          _title: n.title || '',
+          _isOrphan: true,
+          _hasLeaves: hasLeaves,
+          _borderColor: hasLeaves ? '#79b8ff' : null,
+        });
+      });
+      if (sigmaInstance) sigmaInstance.refresh();
+    }
+
+    function removeOrphansFromGraph() {
+      if (!graph) return;
+      orphanNodeData.forEach(n => {
+        const key = String(n.id);
+        if (graph.hasNode(key)) graph.dropNode(key);
+      });
+      if (sigmaInstance) sigmaInstance.refresh();
+    }
+
     function syncOrphanButton() {
       const btn = document.getElementById('orphan-toggle-btn');
       if (!btn) return;
-      if (orphanNodes.length === 0) {
+      if (orphanNodeData.length === 0) {
         btn.style.display = 'none';
         return;
       }
       btn.style.display = '';
       if (showOrphans) {
-        btn.textContent = 'hide orphans (' + orphanNodes.length + ')';
+        btn.textContent = 'hide orphans (' + orphanNodeData.length + ')';
         btn.style.color = '#79b8ff';
         btn.style.borderColor = '#79b8ff';
       } else {
-        btn.textContent = 'show orphans (' + orphanNodes.length + ')';
+        btn.textContent = 'show orphans (' + orphanNodeData.length + ')';
         btn.style.color = '';
         btn.style.borderColor = '';
       }
     }
 
-    /**
-     * Isolate a node: dim everything not directly connected to it.
-     */
+    // ── Isolation ──────────────────────────────────────────────────────────────
     function isolateNode(nodeId) {
-      // Find all connected node IDs
-      const connectedNodeIds = new Set([nodeId]);
+      const key = String(nodeId);
+      if (!graph || !graph.hasNode(key)) return;
+
+      const connectedNodeIds = new Set([key]);
       const connectedEdgeIds = new Set();
-      edgesDS.get().forEach(function (e) {
-        if (e.from === nodeId || e.to === nodeId) {
-          connectedNodeIds.add(e.from);
-          connectedNodeIds.add(e.to);
-          connectedEdgeIds.add(e.id);
+
+      graph.forEachEdge(key, (edge, attrs, source, target) => {
+        connectedNodeIds.add(source);
+        connectedNodeIds.add(target);
+        connectedEdgeIds.add(edge);
+      });
+
+      hiddenNodes = new Set();
+      hiddenEdges = new Set();
+
+      graph.forEachNode((node) => {
+        if (!connectedNodeIds.has(node)) {
+          hiddenNodes.add(node);
         }
       });
 
-      // Save original states and dim non-connected nodes
-      savedNodeStates = {};
-      savedEdgeStates = {};
-
-      nodesDS.get().forEach(function (n) {
-        savedNodeStates[n.id] = {
-          color: n.color,
-          font: n.font,
-          opacity: n.opacity,
-          borderWidth: n.borderWidth,
-          size: n.size,
-        };
-        if (!connectedNodeIds.has(n.id)) {
-          nodesDS.update({
-            id: n.id,
-            hidden: true,
-          });
-        }
-      });
-
-      edgesDS.get().forEach(function (e) {
-        savedEdgeStates[e.id] = {
-          color: e.color,
-          font: e.font,
-          hidden: e.hidden,
-        };
-        if (!connectedEdgeIds.has(e.id)) {
-          edgesDS.update({
-            id: e.id,
-            hidden: true,
-          });
+      graph.forEachEdge((edge) => {
+        if (!connectedEdgeIds.has(edge)) {
+          hiddenEdges.add(edge);
         }
       });
 
       isolatedNodeId = nodeId;
 
-      // Show the reset button
-      var resetBtn = document.getElementById('reset-isolation-btn');
-      var selectedNode = nodesDS.get(nodeId);
-      resetBtn.textContent = 'showing: ' + (selectedNode ? selectedNode.label : 'selected');
+      // Update sigma node/edge reducers to hide
+      if (sigmaInstance) sigmaInstance.refresh();
+
+      const resetBtn = document.getElementById('reset-isolation-btn');
+      const nodeAttrs = graph.getNodeAttributes(key);
+      resetBtn.textContent = 'showing: ' + (nodeAttrs.label || 'selected');
       resetBtn.style.display = '';
       resetBtn.style.color = '#79b8ff';
       resetBtn.style.borderColor = '#79b8ff';
     }
 
-    /**
-     * Reset isolation: restore all nodes and edges to their original state.
-     */
     function resetIsolation() {
       if (!isolatedNodeId) return;
-
-      // Restore nodes
-      nodesDS.get().forEach(function (n) {
-        if (savedNodeStates[n.id]) {
-          nodesDS.update({
-            id: n.id,
-            hidden: false,
-          });
-        }
-      });
-
-      // Restore edges
-      edgesDS.get({ filter: function () { return true; } }).forEach(function (e) {
-        if (savedEdgeStates[e.id]) {
-          edgesDS.update({
-            id: e.id,
-            hidden: false,
-          });
-        }
-      });
-
-      // Also unhide any edges that were hidden (DataSet might not return hidden items via get())
-      Object.keys(savedEdgeStates).forEach(function (eid) {
-        var numId = isNaN(Number(eid)) ? eid : Number(eid);
-        edgesDS.update({ id: numId, hidden: false });
-      });
-
-      // Unhide all nodes too (same reason)
-      Object.keys(savedNodeStates).forEach(function (nid) {
-        nodesDS.update({ id: nid, hidden: false });
-      });
-
-      savedNodeStates = {};
-      savedEdgeStates = {};
+      hiddenNodes = new Set();
+      hiddenEdges = new Set();
       isolatedNodeId = null;
-
-      // Hide the reset button
-      var resetBtn = document.getElementById('reset-isolation-btn');
-      resetBtn.style.display = 'none';
+      if (sigmaInstance) sigmaInstance.refresh();
+      document.getElementById('reset-isolation-btn').style.display = 'none';
     }
 
+    // ── Leaf panel ─────────────────────────────────────────────────────────────
     function closeLeafPanel() {
       document.getElementById('leaf-panel').style.display = 'none';
       document.getElementById('node-search-overlay').style.right = '12px';
       document.getElementById('counts').style.right = '12px';
     }
 
-    /**
-     * Open the leaf panel for a given person node.
-     * @param {string} nodeId       - the person node's ID
-     * @param {string} nodeLabel    - display name for the panel header
-     * @param {string} [highlightLabel] - if provided, scroll to and highlight the row with this label
-     */
     function openLeafPanel(nodeId, nodeLabel, highlightLabel) {
       const items = leafDetails[nodeId] || [];
       document.getElementById('leaf-panel-title').textContent = nodeLabel || nodeId;
@@ -698,26 +615,24 @@
 
       const tbody = document.getElementById('leaf-table-body');
       tbody.innerHTML = items.map(item => {
-        const rel     = item.relationship ? escapeHtmlGlobal(item.relationship) : '<span style="color:#333">—</span>';
+        const rel     = item.relationship ? escapeHtml(item.relationship) : '<span style="color:#333">-</span>';
         const content = item.content
-          ? '<div class="lt-content">' + escapeHtmlGlobal(item.content) + '</div>'
+          ? '<div class="lt-content">' + escapeHtml(item.content) + '</div>'
           : '';
         const rowClass = (highlightLabel && item.label === highlightLabel)
           ? ' class="lt-row-highlight"'
           : '';
-        const dataAttr = ' data-label="' + escapeHtmlGlobal(item.label) + '"';
+        const dataAttr = ' data-label="' + escapeHtml(item.label) + '"';
         return '<tr' + rowClass + dataAttr + '>' +
-          '<td class="lt-label">' + escapeHtmlGlobal(item.label) + content + '</td>' +
+          '<td class="lt-label">' + escapeHtml(item.label) + content + '</td>' +
           '<td class="lt-rel">'  + rel + '</td>' +
           '</tr>';
       }).join('');
 
       document.getElementById('leaf-panel').style.display = 'block';
-      // Shift search overlay and counts badge left so they don't overlap the panel
       document.getElementById('node-search-overlay').style.right = '332px';
       document.getElementById('counts').style.right = '332px';
 
-      // Scroll highlighted row into view
       if (highlightLabel) {
         const highlightedRow = tbody.querySelector('.lt-row-highlight');
         if (highlightedRow) {
@@ -726,69 +641,392 @@
       }
     }
 
-    function escapeHtmlGlobal(s) {
+    function escapeHtml(s) {
       return String(s)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
     }
 
-    // Auto-refresh state
-    const AUTO_REFRESH_INTERVAL = 60; // seconds
-    let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
-    let autoRefreshTimer = null;
-    let countdownTimer = null;
+    // ── ForceAtlas2 in Web Worker ──────────────────────────────────────────────
+    // We inline a small worker that runs ForceAtlas2 iterations
+    function runForceAtlas2(graph, iterations, callback) {
+      // Extract positions and adjacency for the worker
+      const nodes = [];
+      const nodeIndex = {};
+      let idx = 0;
+      graph.forEachNode((key, attrs) => {
+        nodeIndex[key] = idx;
+        nodes.push({
+          key: key,
+          x: attrs.x || (Math.random() * 1000 - 500),
+          y: attrs.y || (Math.random() * 1000 - 500),
+          size: attrs.size || 5,
+        });
+        idx++;
+      });
 
-    function makeNodeItem(n) {
-      // Person nodes with collapsed leaves get a slightly larger size and bolder border
-      const hasLeaves = !!leafDetails[n.id];
-      const baseColor = GROUP_COLORS[n.group] || DEFAULT_COLOR;
-      const nodeColor = hasLeaves
-        ? Object.assign({}, baseColor, { border: '#79b8ff' })
-        : baseColor;
-      const tooltipSuffix = hasLeaves
-        ? '\n\n[' + leafDetails[n.id].length + ' collapsed attributes — click to expand]'
-        : '';
-      return {
-        id: n.id,
-        label: n.label,
-        title: (n.title || '') + tooltipSuffix,
-        group: n.group,
-        color: nodeColor,
-        font: { color: '#e6edf3', size: 11, face: 'monospace' },
-        borderWidth: hasLeaves ? 2 : 1,
-        size: hasLeaves ? 22 : 16,
+      const edges = [];
+      graph.forEachEdge((edge, attrs, source, target) => {
+        if (nodeIndex[source] !== undefined && nodeIndex[target] !== undefined) {
+          edges.push([nodeIndex[source], nodeIndex[target]]);
+        }
+      });
+
+      // Build worker code as a blob
+      const workerCode = `
+        self.onmessage = function(e) {
+          const { nodes, edges, iterations } = e.data;
+          const n = nodes.length;
+          if (n === 0) { self.postMessage({ nodes: [] }); return; }
+
+          // Simple ForceAtlas2-like force-directed layout
+          const settings = {
+            gravity: 1.0,
+            scalingRatio: 10.0,
+            slowDown: 5.0,
+            edgeWeightInfluence: 1.0,
+            barnesHutTheta: 1.5,
+            strongGravityMode: false,
+          };
+
+          // Build adjacency
+          const adj = new Array(n);
+          for (let i = 0; i < n; i++) adj[i] = [];
+          for (const [s, t] of edges) {
+            adj[s].push(t);
+            adj[t].push(s);
+          }
+
+          // Degree
+          const degree = new Float64Array(n);
+          for (let i = 0; i < n; i++) degree[i] = adj[i].length + 1;
+
+          // Positions
+          const x = new Float64Array(n);
+          const y = new Float64Array(n);
+          for (let i = 0; i < n; i++) {
+            x[i] = nodes[i].x;
+            y[i] = nodes[i].y;
+          }
+
+          for (let iter = 0; iter < iterations; iter++) {
+            const dx = new Float64Array(n);
+            const dy = new Float64Array(n);
+
+            // Repulsion (O(n^2) - fine for <10k nodes with few iterations)
+            for (let i = 0; i < n; i++) {
+              for (let j = i + 1; j < n; j++) {
+                let xDist = x[i] - x[j];
+                let yDist = y[i] - y[j];
+                let dist = Math.sqrt(xDist * xDist + yDist * yDist);
+                if (dist < 0.01) dist = 0.01;
+
+                // LinLog repulsion scaled by degree
+                const repForce = settings.scalingRatio * degree[i] * degree[j] / dist;
+
+                const fx = xDist / dist * repForce;
+                const fy = yDist / dist * repForce;
+                dx[i] += fx;
+                dy[i] += fy;
+                dx[j] -= fx;
+                dy[j] -= fy;
+              }
+            }
+
+            // Attraction (edges)
+            for (const [s, t] of edges) {
+              let xDist = x[s] - x[t];
+              let yDist = y[s] - y[t];
+              let dist = Math.sqrt(xDist * xDist + yDist * yDist);
+              if (dist < 0.01) dist = 0.01;
+
+              const attForce = dist;
+              const fx = xDist / dist * attForce;
+              const fy = yDist / dist * attForce;
+              dx[s] -= fx;
+              dy[s] -= fy;
+              dx[t] += fx;
+              dy[t] += fy;
+            }
+
+            // Gravity
+            for (let i = 0; i < n; i++) {
+              const dist = Math.sqrt(x[i] * x[i] + y[i] * y[i]);
+              if (dist > 0) {
+                const gForce = settings.gravity * degree[i];
+                dx[i] -= gForce * x[i] / dist;
+                dy[i] -= gForce * y[i] / dist;
+              }
+            }
+
+            // Apply forces with slowdown
+            const speed = 1.0 / settings.slowDown;
+            for (let i = 0; i < n; i++) {
+              const dLen = Math.sqrt(dx[i] * dx[i] + dy[i] * dy[i]);
+              if (dLen > 0) {
+                const factor = speed * Math.min(10, dLen) / dLen;
+                x[i] += dx[i] * factor;
+                y[i] += dy[i] * factor;
+              }
+            }
+          }
+
+          // Return result
+          const result = [];
+          for (let i = 0; i < n; i++) {
+            result.push({ key: nodes[i].key, x: x[i], y: y[i] });
+          }
+          self.postMessage({ nodes: result });
+        };
+      `;
+
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
+
+      worker.onmessage = function(e) {
+        const result = e.data.nodes;
+        result.forEach(n => {
+          if (graph.hasNode(n.key)) {
+            graph.setNodeAttribute(n.key, 'x', n.x);
+            graph.setNodeAttribute(n.key, 'y', n.y);
+          }
+        });
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+        callback();
       };
+
+      worker.postMessage({ nodes, edges, iterations });
     }
 
-    function makeEdgeItem(e, i) {
-      return {
-        id: i,
-        from: e.from,
-        to: e.to,
-        label: undefined,          // hidden by default; shown on hover
-        _fullLabel: e.label,       // stash the real label for hover display
-        title: e.title,
-        color: { color: '#444', highlight: '#58a6ff', hover: '#58a6ff' },
-        font: { color: '#888', size: 9, face: 'monospace', background: '#0d1117', strokeWidth: 0 },
-        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-        smooth: { type: 'dynamic' },
-      };
-    }
-
+    // ── Data fetch ─────────────────────────────────────────────────────────────
     async function fetchGraphData() {
       const resp = await fetch('/graph-data');
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       return resp.json();
     }
 
+    // ── Render ─────────────────────────────────────────────────────────────────
+    // Hover state
+    let hoveredNode = null;
+    let hoveredEdge = null;
+    let hoveredNodeEdges = new Set();
+
+    function renderGraph(data) {
+      const canvasEl = document.getElementById('graph-canvas');
+
+      // Destroy previous instance
+      if (sigmaInstance) {
+        sigmaInstance.kill();
+        sigmaInstance = null;
+      }
+
+      // Create Graphology graph
+      graph = new graphology.Graph({ type: 'directed', multi: true, allowSelfLoops: true });
+
+      // Add nodes
+      data.nodes.forEach(n => {
+        const key = String(n.id);
+        const hasLeaves = !!leafDetails[n.id];
+        graph.addNode(key, {
+          x: Math.random() * 1000 - 500,
+          y: Math.random() * 1000 - 500,
+          label: n.label || '',
+          size: hasLeaves ? 8 : 5,
+          color: GROUP_COLORS[n.group] || DEFAULT_COLOR,
+          _group: n.group || '',
+          _title: n.title || '',
+          _hasLeaves: hasLeaves,
+          _borderColor: hasLeaves ? '#79b8ff' : null,
+          _isOrphan: false,
+        });
+      });
+
+      // Add edges
+      data.edges.forEach((e, i) => {
+        const source = String(e.from);
+        const target = String(e.to);
+        if (!graph.hasNode(source) || !graph.hasNode(target)) return;
+        // Handle multi-edges by generating unique keys
+        const edgeKey = 'e-' + i;
+        try {
+          graph.addEdgeWithKey(edgeKey, source, target, {
+            label: e.label || '',
+            _title: e.title || '',
+            color: '#444',
+            size: 1,
+            type: 'arrow',
+          });
+        } catch (err) {
+          // Skip duplicate edges
+        }
+      });
+
+      // Run layout in worker
+      const loadingEl = document.getElementById('loading');
+      loadingEl.textContent = 'Computing layout...';
+      loadingEl.style.display = 'block';
+
+      const layoutIterations = Math.min(500, Math.max(100, Math.round(50000 / (data.nodes.length + 1))));
+
+      runForceAtlas2(graph, layoutIterations, () => {
+        loadingEl.style.display = 'none';
+        createSigmaInstance(canvasEl);
+      });
+    }
+
+    function createSigmaInstance(canvasEl) {
+      // Node reducer: handles isolation hiding and hover highlighting
+      const nodeReducer = (node, data) => {
+        const res = { ...data };
+
+        // Hidden by isolation
+        if (hiddenNodes.has(node)) {
+          res.hidden = true;
+          return res;
+        }
+
+        // Dim nodes not connected to hovered node
+        if (hoveredNode && hoveredNode !== node) {
+          const isConnected = graph.hasEdge(hoveredNode, node) || graph.hasEdge(node, hoveredNode);
+          if (!isConnected) {
+            res.color = '#333';
+            res.label = null;
+          }
+        }
+
+        return res;
+      };
+
+      // Edge reducer: handles isolation hiding, hover labels, arrow display
+      const edgeReducer = (edge, data) => {
+        const res = { ...data };
+        res.forceLabel = false;
+
+        // Hidden by isolation
+        if (hiddenEdges.has(edge)) {
+          res.hidden = true;
+          return res;
+        }
+
+        // Show label on hover
+        if (hoveredEdge === edge) {
+          res.forceLabel = true;
+          res.color = '#58a6ff';
+          res.size = 2;
+        }
+
+        // Show labels for edges connected to hovered node
+        if (hoveredNodeEdges.has(edge)) {
+          res.forceLabel = true;
+          res.color = '#58a6ff';
+          res.size = 2;
+        }
+
+        // Dim edges not connected to hovered node
+        if (hoveredNode && !hoveredNodeEdges.has(edge)) {
+          res.color = '#222';
+        }
+
+        return res;
+      };
+
+      sigmaInstance = new Sigma(graph, canvasEl, {
+        renderLabels: true,
+        renderEdgeLabels: true,
+        labelFont: 'monospace',
+        labelSize: 11,
+        labelColor: { color: '#e6edf3' },
+        edgeLabelFont: 'monospace',
+        edgeLabelSize: 9,
+        edgeLabelColor: { color: '#888' },
+        defaultEdgeType: 'arrow',
+        defaultNodeColor: DEFAULT_COLOR,
+        defaultEdgeColor: '#444',
+        labelDensity: 0.12,
+        labelGridCellSize: 80,
+        labelRenderedSizeThreshold: 4,
+        nodeReducer: nodeReducer,
+        edgeReducer: edgeReducer,
+        stagePadding: 30,
+        allowInvalidContainer: true,
+        minCameraRatio: 0.02,
+        maxCameraRatio: 20,
+      });
+
+      // ── Click handler ──────────────────────────────────────────────────────
+      sigmaInstance.on('clickNode', ({ node, event }) => {
+        const nodeId = node;
+
+        // If clicking the already-isolated node, reset
+        if (isolatedNodeId && String(isolatedNodeId) === nodeId) {
+          resetIsolation();
+          closeLeafPanel();
+          return;
+        }
+
+        // Reset existing isolation
+        if (isolatedNodeId) resetIsolation();
+
+        // Isolate clicked node
+        isolateNode(nodeId);
+
+        // Open leaf panel if person node with leaves
+        if (leafDetails[nodeId]) {
+          const attrs = graph.getNodeAttributes(nodeId);
+          openLeafPanel(nodeId, attrs.label || nodeId);
+        } else {
+          closeLeafPanel();
+        }
+      });
+
+      sigmaInstance.on('clickStage', () => {
+        resetIsolation();
+        closeLeafPanel();
+      });
+
+      // ── Hover handlers ─────────────────────────────────────────────────────
+      sigmaInstance.on('enterNode', ({ node }) => {
+        hoveredNode = node;
+        hoveredNodeEdges = new Set();
+        graph.forEachEdge(node, (edge) => {
+          hoveredNodeEdges.add(edge);
+        });
+        sigmaInstance.refresh();
+        canvasEl.style.cursor = 'pointer';
+      });
+
+      sigmaInstance.on('leaveNode', () => {
+        hoveredNode = null;
+        hoveredNodeEdges = new Set();
+        sigmaInstance.refresh();
+        canvasEl.style.cursor = 'default';
+      });
+
+      sigmaInstance.on('enterEdge', ({ edge }) => {
+        hoveredEdge = edge;
+        sigmaInstance.refresh();
+      });
+
+      sigmaInstance.on('leaveEdge', () => {
+        hoveredEdge = null;
+        sigmaInstance.refresh();
+      });
+    }
+
+    // ── Load graph ─────────────────────────────────────────────────────────────
     async function loadGraph() {
       const loadingEl = document.getElementById('loading');
       const countsEl = document.getElementById('counts');
       loadingEl.style.display = 'block';
+      loadingEl.textContent = 'Loading graph...';
       countsEl.textContent = 'loading...';
       try {
         const data = await fetchGraphData();
+        rawNodes = data.nodes;
+        rawEdges = data.edges;
         loadingEl.style.display = 'none';
         const { visibleNodes, visibleEdges } = processLeafNodes(data.nodes, data.edges);
         const { mainNodes, mainEdges } = identifyOrphans(visibleNodes, visibleEdges);
@@ -799,192 +1037,103 @@
         countsEl.textContent =
           mainNodes.length + ' nodes  |  ' + mainEdges.length + ' edges' +
           (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '') +
-          (orphanNodes.length > 0 ? '  |  ' + orphanNodes.length + ' orphaned' : '');
+          (orphanNodeData.length > 0 ? '  |  ' + orphanNodeData.length + ' orphaned' : '');
       } catch (e) {
         loadingEl.textContent = 'Error: ' + e.message;
         countsEl.textContent = 'error';
       }
     }
 
-    function renderGraph(data) {
-      const canvasEl = document.getElementById('graph-canvas');
-
-      const visNodes = data.nodes.map(makeNodeItem);
-      const visEdges = data.edges.map(makeEdgeItem);
-
-      const options = {
-        physics: {
-          enabled: true,
-          solver: 'barnesHut',
-          barnesHut: {
-            gravitationalConstant: -2000,
-            centralGravity: 0.1,
-            springLength: 150,
-            springConstant: 0.04,
-            damping: 0.6,
-            avoidOverlap: 0.1,
-          },
-          stabilization: { iterations: 300, fit: true },
-        },
-        interaction: {
-          hover: true,
-          tooltipDelay: 100,
-          navigationButtons: false,
-          zoomView: true,
-          dragView: true,
-        },
-        layout: {
-          improvedLayout: true,
-        },
-        nodes: {
-          shape: 'dot',
-        },
-        edges: {
-          width: 1,
-          selectionWidth: 2,
-        },
-        background: { color: '#0d1117' },
-      };
-
-      nodesDS = new vis.DataSet(visNodes);
-      edgesDS = new vis.DataSet(visEdges);
-
-      if (graphNetwork) {
-        graphNetwork.destroy();
-      }
-      graphNetwork = new vis.Network(canvasEl, { nodes: nodesDS, edges: edgesDS }, options);
-      graphNetwork.once('stabilizationIterationsDone', () => {
-        // Disable physics entirely after layout is computed — positions are now fixed
-        graphNetwork.setOptions({ physics: { enabled: false } });
-      });
-
-      // Click handler: isolate node neighborhood, open leaf panel for person nodes
-      graphNetwork.on('click', function (params) {
-        if (params.nodes.length > 0) {
-          const nodeId = params.nodes[0];
-
-          // If clicking the already-isolated node, reset isolation
-          if (isolatedNodeId === nodeId) {
-            resetIsolation();
-            closeLeafPanel();
-            return;
-          }
-
-          // Reset any existing isolation before applying new one
-          if (isolatedNodeId) resetIsolation();
-
-          // Isolate the clicked node's neighborhood
-          isolateNode(nodeId);
-
-          // Open leaf panel if this is a person node with collapsed leaves
-          if (leafDetails[nodeId]) {
-            const node = nodesDS.get(nodeId);
-            openLeafPanel(nodeId, node ? node.label : nodeId);
-          } else {
-            closeLeafPanel();
-          }
-        } else {
-          // Clicked background — reset isolation and close panel
-          resetIsolation();
-          closeLeafPanel();
-        }
-      });
-
-      // ── Edge labels on hover only ──────────────────────────────────────────
-      // Show edge label when hovering over an edge
-      let hoveredEdgeId = null;
-      graphNetwork.on('hoverEdge', function (params) {
-        const eid = params.edge;
-        if (hoveredEdgeId === eid) return;
-        // Hide previous
-        if (hoveredEdgeId !== null) {
-          edgesDS.update({ id: hoveredEdgeId, label: undefined });
-        }
-        hoveredEdgeId = eid;
-        const edge = edgesDS.get(eid);
-        if (edge && edge._fullLabel) {
-          edgesDS.update({ id: eid, label: edge._fullLabel });
-        }
-      });
-      graphNetwork.on('blurEdge', function (params) {
-        if (hoveredEdgeId !== null) {
-          edgesDS.update({ id: hoveredEdgeId, label: undefined });
-          hoveredEdgeId = null;
-        }
-      });
-
-      // Show edge labels for all edges connected to a hovered node
-      let hoveredNodeEdges = [];
-      graphNetwork.on('hoverNode', function (params) {
-        const nodeId = params.node;
-        const connected = graphNetwork.getConnectedEdges(nodeId);
-        connected.forEach(function (eid) {
-          const edge = edgesDS.get(eid);
-          if (edge && edge._fullLabel) {
-            edgesDS.update({ id: eid, label: edge._fullLabel });
-          }
-        });
-        hoveredNodeEdges = connected;
-      });
-      graphNetwork.on('blurNode', function (params) {
-        hoveredNodeEdges.forEach(function (eid) {
-          // Don't hide if this edge is still hovered directly
-          if (eid !== hoveredEdgeId) {
-            edgesDS.update({ id: eid, label: undefined });
-          }
-        });
-        hoveredNodeEdges = [];
-      });
-
-    }
-
     async function refreshGraph() {
-      // Reset any active isolation before refreshing data
       resetIsolation();
-      if (!graphNetwork || !nodesDS || !edgesDS) {
-        await loadGraph();
-        return;
-      }
       const countsEl = document.getElementById('counts');
       try {
         const data = await fetchGraphData();
+        rawNodes = data.nodes;
+        rawEdges = data.edges;
         const { visibleNodes, visibleEdges } = processLeafNodes(data.nodes, data.edges);
         const { mainNodes, mainEdges } = identifyOrphans(visibleNodes, visibleEdges);
 
-        // Build lookup maps for incoming main (non-orphan) data
-        const incomingNodeIds = new Set(mainNodes.map(n => n.id));
-        const incomingEdgeIds = new Set(mainEdges.map((_, i) => i));
-
-        // Also account for currently-shown orphan ids so we can re-add them if needed
-        const orphanIds = new Set(orphanNodes.map(n => n.id));
-
-        // Remove nodes/edges no longer present (exclude currently-shown orphans from removal)
-        const removedNodeIds = nodesDS.getIds().filter(id => !incomingNodeIds.has(id) && !orphanIds.has(id));
-        const removedEdgeIds = edgesDS.getIds().filter(id => !incomingEdgeIds.has(id));
-        if (removedNodeIds.length) nodesDS.remove(removedNodeIds);
-        if (removedEdgeIds.length) edgesDS.remove(removedEdgeIds);
-
-        // Update or add main nodes
-        const nodeUpdates = mainNodes.map(makeNodeItem);
-        nodesDS.update(nodeUpdates);
-
-        // Update or add edges
-        const edgeUpdates = mainEdges.map(makeEdgeItem);
-        edgesDS.update(edgeUpdates);
-
-        // If orphans were showing, refresh them in place; if not, strip any stale orphan nodes
-        if (showOrphans) {
-          addOrphansToGraph();
+        // If no sigma instance yet, do full load
+        if (!sigmaInstance || !graph) {
+          showOrphans = false;
+          syncOrphanButton();
+          renderGraph({ nodes: mainNodes, edges: mainEdges });
         } else {
-          nodesDS.remove(orphanNodes.map(n => n.id));
+          // Incremental update: update graph in-place, preserve positions
+          const existingPositions = {};
+          graph.forEachNode((key, attrs) => {
+            existingPositions[key] = { x: attrs.x, y: attrs.y };
+          });
+
+          // Find nodes to add/remove
+          const newNodeIds = new Set(mainNodes.map(n => String(n.id)));
+          const currentNodeIds = new Set();
+          graph.forEachNode((key, attrs) => {
+            if (!attrs._isOrphan) currentNodeIds.add(key);
+          });
+
+          // Remove old nodes (and their edges)
+          currentNodeIds.forEach(key => {
+            if (!newNodeIds.has(key)) {
+              graph.dropNode(key);
+            }
+          });
+
+          // Add or update nodes
+          mainNodes.forEach(n => {
+            const key = String(n.id);
+            const hasLeaves = !!leafDetails[n.id];
+            const attrs = {
+              label: n.label || '',
+              size: hasLeaves ? 8 : 5,
+              color: GROUP_COLORS[n.group] || DEFAULT_COLOR,
+              _group: n.group || '',
+              _title: n.title || '',
+              _hasLeaves: hasLeaves,
+              _borderColor: hasLeaves ? '#79b8ff' : null,
+              _isOrphan: false,
+            };
+            if (graph.hasNode(key)) {
+              // Update attributes, keep position
+              Object.entries(attrs).forEach(([k, v]) => graph.setNodeAttribute(key, k, v));
+            } else {
+              // New node: random position or run mini-layout later
+              const pos = existingPositions[key] || { x: Math.random() * 1000 - 500, y: Math.random() * 1000 - 500 };
+              graph.addNode(key, { ...attrs, x: pos.x, y: pos.y });
+            }
+          });
+
+          // Clear and re-add edges
+          graph.clearEdges();
+          mainEdges.forEach((e, i) => {
+            const source = String(e.from);
+            const target = String(e.to);
+            if (!graph.hasNode(source) || !graph.hasNode(target)) return;
+            try {
+              graph.addEdgeWithKey('e-' + i, source, target, {
+                label: e.label || '',
+                _title: e.title || '',
+                color: '#444',
+                size: 1,
+                type: 'arrow',
+              });
+            } catch (err) {}
+          });
+
+          // Refresh orphans
+          if (showOrphans) {
+            addOrphansToGraph();
+          }
+          syncOrphanButton();
+          sigmaInstance.refresh();
         }
-        syncOrphanButton();
 
         const leafCount = data.nodes.length - visibleNodes.length;
         countsEl.textContent =
           mainNodes.length + ' nodes  |  ' + mainEdges.length + ' edges' +
           (leafCount > 0 ? '  |  ' + leafCount + ' collapsed' : '') +
-          (orphanNodes.length > 0 ? '  |  ' + orphanNodes.length + ' orphaned' : '');
+          (orphanNodeData.length > 0 ? '  |  ' + orphanNodeData.length + ' orphaned' : '');
         pulseIndicator();
       } catch (e) {
         countsEl.textContent = 'refresh error';
@@ -992,10 +1141,17 @@
     }
 
     function fitGraph() {
-      if (graphNetwork) graphNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+      if (sigmaInstance) {
+        const camera = sigmaInstance.getCamera();
+        camera.animatedReset({ duration: 400 });
+      }
     }
 
-    // Auto-refresh indicator + countdown
+    // ── Auto-refresh ───────────────────────────────────────────────────────────
+    const AUTO_REFRESH_INTERVAL = 60;
+    let autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
+    let autoRefreshTimer = null;
+    let countdownTimer = null;
 
     function pulseIndicator() {
       const el = document.getElementById('auto-refresh-indicator');
@@ -1012,14 +1168,12 @@
       autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
       updateIndicator();
 
-      // Tick every second for the countdown display
       countdownTimer = setInterval(() => {
         autoRefreshCountdown -= 1;
         if (autoRefreshCountdown < 0) autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
         updateIndicator();
       }, 1000);
 
-      // Actual refresh every 60 seconds
       autoRefreshTimer = setInterval(async () => {
         autoRefreshCountdown = AUTO_REFRESH_INTERVAL;
         updateIndicator();
@@ -1027,12 +1181,12 @@
       }, AUTO_REFRESH_INTERVAL * 1000);
     }
 
-    // Ingestion status
+    // ── Ingestion status ───────────────────────────────────────────────────────
     async function refreshIngestionStatus() {
       const el = document.getElementById('ingestion-status');
       try {
         const resp = await fetch('/ingestion-status');
-        if (!resp.ok) { el.textContent = '&#x1F4CA; unavailable'; return; }
+        if (!resp.ok) { el.textContent = '\uD83D\uDCCA unavailable'; return; }
         const d = await resp.json();
         let text = '\uD83D\uDCCA Graph: ' + d.episodes + '/' + d.total_episodes + ' episodes \u00B7 ' + d.entities + ' entities \u00B7 ' + d.edges + ' edges';
         if (d.workers_running > 0) text += ' \u00B7 \u23F3 ingesting...';
@@ -1047,21 +1201,18 @@
 
     loadGraph().then(startAutoRefresh);
 
-    // GameCube OS sounds — attach to toolbar buttons
+    // GameCube OS sounds
     document.querySelectorAll('.graph-btn').forEach(function (btn) {
       btn.addEventListener('mouseenter', function () { if (window.GCSounds) GCSounds.hover(); });
       btn.addEventListener('click', function () { if (window.GCSounds) GCSounds.click(); }, true);
     });
 
     // ── Node Search (Ctrl+F / Cmd+F) ─────────────────────────────────────────
-    // Searches ALL nodes including leaf nodes collapsed into the sidebar panel.
-
     (function () {
       const overlay  = document.getElementById('node-search-overlay');
       const input    = document.getElementById('node-search-input');
       const results  = document.getElementById('node-search-results');
       let activeIdx  = -1;
-      // matchCache entries: { label, group, isLeaf, parentId, parentLabel, _nodeId }
       let matchCache = [];
 
       function clearSearch() {
@@ -1071,31 +1222,24 @@
         activeIdx = -1;
       }
 
-      function escapeHtml(s) {
-        return String(s)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;');
-      }
-
       function buildResults(query) {
         results.innerHTML = '';
         activeIdx = -1;
         if (!query) { matchCache = []; return; }
 
         const q = query.toLowerCase();
-
-        // Search leafSearchIndex (includes rendered nodes + collapsed leaf nodes).
-        // Fall back to nodesDS if leafSearchIndex not yet populated (e.g. graph still loading).
         let candidates;
         if (leafSearchIndex && leafSearchIndex.length > 0) {
           candidates = leafSearchIndex.filter(entry =>
             entry.label && entry.label.toLowerCase().includes(q)
           );
-        } else if (nodesDS) {
-          candidates = nodesDS.get()
-            .filter(n => n.label && n.label.toLowerCase().includes(q))
-            .map(n => ({ label: n.label, group: n.group || '', isLeaf: false, _nodeId: n.id, parentId: null, parentLabel: null }));
+        } else if (graph) {
+          candidates = [];
+          graph.forEachNode((key, attrs) => {
+            if (attrs.label && attrs.label.toLowerCase().includes(q)) {
+              candidates.push({ label: attrs.label, group: attrs._group || '', isLeaf: false, _nodeId: key, parentId: null, parentLabel: null });
+            }
+          });
         } else {
           candidates = [];
         }
@@ -1107,15 +1251,13 @@
           div.className = 'node-search-result';
           div.dataset.idx = i;
           const groupLabel = entry.group || '';
-          const dotColor = (GROUP_COLORS[groupLabel] || DEFAULT_COLOR).background;
+          const dotColor = GROUP_COLORS[groupLabel] || DEFAULT_COLOR;
 
           if (entry.isLeaf) {
-            // Leaf node: show label + "in [ParentName]" annotation
             div.innerHTML =
               escapeHtml(entry.label) +
               '<span class="ns-group" style="color:#79b8ff"> in ' + escapeHtml(entry.parentLabel || '?') + '</span>';
           } else if (entry.isOrphan) {
-            // Orphan node: show label + dim "orphan" tag
             div.innerHTML =
               escapeHtml(entry.label) +
               (groupLabel ? '<span class="ns-group" style="color:' + dotColor + '">&#9679; ' + escapeHtml(groupLabel) + '</span>' : '') +
@@ -1140,21 +1282,35 @@
         activeIdx = idx;
       }
 
-      let flashTimer = null;
-
       function focusAndFlashNode(nodeId) {
-        if (!graphNetwork || !nodesDS) return;
-        graphNetwork.selectNodes([nodeId]);
-        graphNetwork.focus(nodeId, {
-          scale: 1.5,
-          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
-        });
-        const orig = nodesDS.get(nodeId);
-        if (!orig) return;
-        nodesDS.update({ id: nodeId, borderWidth: 4, color: Object.assign({}, orig.color, { border: '#6b5ce7' }) });
-        clearTimeout(flashTimer);
-        flashTimer = setTimeout(function () {
-          nodesDS.update({ id: nodeId, borderWidth: orig.borderWidth || 1, color: orig.color });
+        if (!sigmaInstance || !graph || !graph.hasNode(String(nodeId))) return;
+        const key = String(nodeId);
+        const attrs = graph.getNodeAttributes(key);
+
+        // Animate camera to center on node
+        const camera = sigmaInstance.getCamera();
+        const nd = sigmaInstance.getNodeDisplayData(key);
+        if (nd) {
+          // nodeDisplayData x/y are in sigma's internal coordinate space (same as camera)
+          camera.animate(
+            { x: nd.x, y: nd.y, ratio: 0.3 },
+            { duration: 500 }
+          );
+        }
+
+        // Flash: temporarily increase size and change color
+        const origSize = attrs.size;
+        const origColor = attrs.color;
+        graph.setNodeAttribute(key, 'size', origSize * 2.5);
+        graph.setNodeAttribute(key, 'color', '#6b5ce7');
+        sigmaInstance.refresh();
+
+        setTimeout(() => {
+          if (graph.hasNode(key)) {
+            graph.setNodeAttribute(key, 'size', origSize);
+            graph.setNodeAttribute(key, 'color', origColor);
+            sigmaInstance.refresh();
+          }
         }, 800);
       }
 
@@ -1164,18 +1320,14 @@
         clearSearch();
 
         if (entry.isLeaf) {
-          // Leaf node: navigate to the parent person node, open panel, highlight the row
-          if (!graphNetwork) return;
           const parentId = entry.parentId;
-          const parentNode = nodesDS ? nodesDS.get(parentId) : null;
           focusAndFlashNode(parentId);
+          const parentNode = graph ? (graph.hasNode(String(parentId)) ? graph.getNodeAttributes(String(parentId)) : null) : null;
           openLeafPanel(parentId, parentNode ? parentNode.label : (entry.parentLabel || parentId), entry.label);
         } else if (entry.isOrphan) {
-          // Orphan node: ensure orphans are visible first, then navigate
           if (!showOrphans) toggleOrphans();
           focusAndFlashNode(entry._nodeId);
         } else {
-          // Rendered node: navigate directly
           focusAndFlashNode(entry._nodeId);
         }
       }
@@ -1205,7 +1357,6 @@
         }
       });
 
-      // Live search as user types
       input.addEventListener('input', function () {
         buildResults(input.value.trim());
         if (matchCache.length > 0) setActive(0);
