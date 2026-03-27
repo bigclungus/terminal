@@ -283,6 +283,7 @@
   <div id="toolbar">
     <button class="graph-btn" onclick="refreshGraph()">Refresh</button>
     <button class="graph-btn" onclick="fitGraph()">Fit</button>
+    <button class="graph-btn" id="reset-isolation-btn" onclick="resetIsolation(); closeLeafPanel();" style="display:none">reset filter</button>
     <button class="graph-btn" id="orphan-toggle-btn" onclick="toggleOrphans()" style="display:none">show orphans (0)</button>
     <span id="auto-refresh-indicator">auto-refresh: 60s</span>
     <span id="ingestion-status">&#x1F4CA; loading...</span>
@@ -342,6 +343,11 @@
     let graphNetwork = null;
     let nodesDS = null;
     let edgesDS = null;
+
+    // Node isolation state
+    let isolatedNodeId = null;       // currently isolated node, or null
+    let savedNodeStates = {};        // original node states before dimming
+    let savedEdgeStates = {};        // original edge states before dimming
 
     // Leaf-node collapse state (populated in processLeafNodes)
     let leafDetails = {};   // personNodeId -> [{label, relationship, content}]
@@ -565,6 +571,112 @@
       }
     }
 
+    /**
+     * Isolate a node: dim everything not directly connected to it.
+     */
+    function isolateNode(nodeId) {
+      // Find all connected node IDs
+      const connectedNodeIds = new Set([nodeId]);
+      const connectedEdgeIds = new Set();
+      edgesDS.get().forEach(function (e) {
+        if (e.from === nodeId || e.to === nodeId) {
+          connectedNodeIds.add(e.from);
+          connectedNodeIds.add(e.to);
+          connectedEdgeIds.add(e.id);
+        }
+      });
+
+      // Save original states and dim non-connected nodes
+      savedNodeStates = {};
+      savedEdgeStates = {};
+
+      nodesDS.get().forEach(function (n) {
+        savedNodeStates[n.id] = {
+          color: n.color,
+          font: n.font,
+          opacity: n.opacity,
+          borderWidth: n.borderWidth,
+          size: n.size,
+        };
+        if (!connectedNodeIds.has(n.id)) {
+          nodesDS.update({
+            id: n.id,
+            hidden: true,
+          });
+        }
+      });
+
+      edgesDS.get().forEach(function (e) {
+        savedEdgeStates[e.id] = {
+          color: e.color,
+          font: e.font,
+          hidden: e.hidden,
+        };
+        if (!connectedEdgeIds.has(e.id)) {
+          edgesDS.update({
+            id: e.id,
+            hidden: true,
+          });
+        }
+      });
+
+      isolatedNodeId = nodeId;
+
+      // Show the reset button
+      var resetBtn = document.getElementById('reset-isolation-btn');
+      var selectedNode = nodesDS.get(nodeId);
+      resetBtn.textContent = 'showing: ' + (selectedNode ? selectedNode.label : 'selected');
+      resetBtn.style.display = '';
+      resetBtn.style.color = '#79b8ff';
+      resetBtn.style.borderColor = '#79b8ff';
+    }
+
+    /**
+     * Reset isolation: restore all nodes and edges to their original state.
+     */
+    function resetIsolation() {
+      if (!isolatedNodeId) return;
+
+      // Restore nodes
+      nodesDS.get().forEach(function (n) {
+        if (savedNodeStates[n.id]) {
+          nodesDS.update({
+            id: n.id,
+            hidden: false,
+          });
+        }
+      });
+
+      // Restore edges
+      edgesDS.get({ filter: function () { return true; } }).forEach(function (e) {
+        if (savedEdgeStates[e.id]) {
+          edgesDS.update({
+            id: e.id,
+            hidden: false,
+          });
+        }
+      });
+
+      // Also unhide any edges that were hidden (DataSet might not return hidden items via get())
+      Object.keys(savedEdgeStates).forEach(function (eid) {
+        var numId = isNaN(Number(eid)) ? eid : Number(eid);
+        edgesDS.update({ id: numId, hidden: false });
+      });
+
+      // Unhide all nodes too (same reason)
+      Object.keys(savedNodeStates).forEach(function (nid) {
+        nodesDS.update({ id: nid, hidden: false });
+      });
+
+      savedNodeStates = {};
+      savedEdgeStates = {};
+      isolatedNodeId = null;
+
+      // Hide the reset button
+      var resetBtn = document.getElementById('reset-isolation-btn');
+      resetBtn.style.display = 'none';
+    }
+
     function closeLeafPanel() {
       document.getElementById('leaf-panel').style.display = 'none';
       document.getElementById('node-search-overlay').style.right = '12px';
@@ -743,25 +855,42 @@
         graphNetwork.setOptions({ physics: { stabilization: false } });
       });
 
-      // Click handler: open leaf panel for person nodes, close panel for background clicks
+      // Click handler: isolate node neighborhood, open leaf panel for person nodes
       graphNetwork.on('click', function (params) {
         if (params.nodes.length > 0) {
           const nodeId = params.nodes[0];
+
+          // If clicking the already-isolated node, reset isolation
+          if (isolatedNodeId === nodeId) {
+            resetIsolation();
+            closeLeafPanel();
+            return;
+          }
+
+          // Reset any existing isolation before applying new one
+          if (isolatedNodeId) resetIsolation();
+
+          // Isolate the clicked node's neighborhood
+          isolateNode(nodeId);
+
+          // Open leaf panel if this is a person node with collapsed leaves
           if (leafDetails[nodeId]) {
             const node = nodesDS.get(nodeId);
             openLeafPanel(nodeId, node ? node.label : nodeId);
           } else {
-            // Clicked a non-person or person with no collapsed leaves — close panel
             closeLeafPanel();
           }
         } else {
-          // Clicked background
+          // Clicked background — reset isolation and close panel
+          resetIsolation();
           closeLeafPanel();
         }
       });
     }
 
     async function refreshGraph() {
+      // Reset any active isolation before refreshing data
+      resetIsolation();
       if (!graphNetwork || !nodesDS || !edgesDS) {
         await loadGraph();
         return;
