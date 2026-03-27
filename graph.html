@@ -867,7 +867,8 @@
       }
       graphNetwork = new vis.Network(canvasEl, { nodes: nodesDS, edges: edgesDS }, options);
       graphNetwork.once('stabilizationIterationsDone', () => {
-        graphNetwork.setOptions({ physics: { stabilization: false } });
+        // Disable physics entirely after layout is computed — positions are now fixed
+        graphNetwork.setOptions({ physics: { enabled: false } });
       });
 
       // Click handler: isolate node neighborhood, open leaf panel for person nodes
