@@ -244,7 +244,8 @@ HTML = r"""<!DOCTYPE html>
   <script src="/gamecube-sounds.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0d0d0d; display: flex; flex-direction: column; height: 100vh; font-family: monospace; }
+    body { background: #0d0d0d; display: flex; flex-direction: column; height: 100vh; font-family: monospace;
+           padding-top: 0 !important; }
     /* sitenav.js injects the shared nav as first flex child; override its sticky
        position so it participates in the column layout instead of floating.
        Force single-line at all viewport widths — no wrapping on the terminal page. */
@@ -1348,9 +1349,13 @@ async def websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    # Send existing log content first
+    # Send tail of existing log content (cap at 512KB to avoid OOM on large logs)
+    MAX_INITIAL_BYTES = 512 * 1024
     try:
         with open(LOGFILE, 'rb') as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - MAX_INITIAL_BYTES))
             existing = f.read()
         if existing:
             await ws.send_bytes(existing)
